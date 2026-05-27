@@ -1,14 +1,15 @@
 """FastAPI application entry point.
 
 Currently mounts:
-  - /auth/*  — setup, login, logout, me, forgot, reset    (step 3)
-  - /admin/* — Anthropic credential management            (step 4)
+  - /auth/*     — setup, login, logout, me, forgot, reset    (step 3)
+  - /admin/*    — Anthropic credential management            (step 4)
+  - /api/jobs/* — job intake, artefact reads, approval gate  (step 11)
 
 On startup, runs `alembic upgrade head` against ~/.ans-tool/data.db so a
 fresh install reaches a usable state without manual CLI steps.
 
 Later steps will add:
-  - /jobs/* (step 7+)
+  - Stage 1 run / dry-run endpoints (deferred — Step 11 is fake-safe only)
   - static UI mounts (step 16)
   - Ghostscript/Poppler probes and concurrent-job semaphore
 """
@@ -24,6 +25,7 @@ from fastapi import FastAPI
 
 from backend.admin.routes import router as admin_router
 from backend.auth.routes import router as auth_router
+from backend.jobs.routes import router as jobs_router
 
 
 def _run_migrations() -> None:
@@ -50,6 +52,7 @@ app = FastAPI(
 
 app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router, prefix="/admin")
+app.include_router(jobs_router, prefix="/api/jobs")
 
 
 @app.get("/health")
