@@ -44,6 +44,7 @@ from typing import Any, ClassVar
 
 from backend.agents.briefing_models import Briefing
 from backend.agents.contact_models import ContactExtractionResult
+from backend.agents.mapping_models import ProductMapping
 from backend.agents.needs_models import NeedsAssessment
 from backend.agents.research_models import ResearchDossier
 from backend.jobs.state import JobState, TransitionRecord
@@ -505,6 +506,49 @@ def read_briefing(job_id: str) -> Briefing:
         raise JobNotFound(f"briefing.json not found for job {job_id}")
     raw = json.loads(path.read_text(encoding="utf-8"))
     return Briefing.model_validate(raw)
+
+
+# ---------------------------------------------------------------------------
+# product_mapping.json
+# ---------------------------------------------------------------------------
+
+def _product_mapping_path(job_id: str) -> Path:
+    return job_folder(job_id) / "product_mapping.json"
+
+
+def write_product_mapping(job_id: str, mapping: ProductMapping) -> Path:
+    """Atomically write the Pydantic product mapping to disk.
+
+    Returns the path written. Stage 2's first artefact: the bridge
+    between the approved briefing and the three downstream writers
+    (benefits / FAQ / objections). Mirrors :func:`write_briefing` —
+    ``model_dump(mode="json")`` handles the ``HttpUrl`` / ``date`` /
+    enum → string conversions, ``create_job_folder`` is idempotent so
+    a missing folder on a rare error path doesn't blow up the writer.
+    """
+    create_job_folder(job_id)
+    payload = mapping.model_dump(mode="json")
+    target = _product_mapping_path(job_id)
+    _atomic_write_json(target, payload)
+    return target
+
+
+def read_product_mapping(job_id: str) -> ProductMapping:
+    """Read and Pydantic-validate ``product_mapping.json``.
+
+    Same exception contract as :func:`read_briefing`. The model-level
+    validator on :class:`ProductMapping` re-checks the
+    ``knowledge_excerpt_refs`` range on reload, so a hand-edited
+    mapping with broken indices fails here rather than producing a
+    broken citation in a downstream writer.
+    """
+    path = _product_mapping_path(job_id)
+    if not path.exists():
+        raise JobNotFound(
+            f"product_mapping.json not found for job {job_id}"
+        )
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return ProductMapping.model_validate(raw)
 
 
 # ---------------------------------------------------------------------------

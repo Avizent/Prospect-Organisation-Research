@@ -69,6 +69,8 @@ from backend.agents.briefing_compiler import BriefingCompiler
 from backend.agents.briefing_models import Briefing
 from backend.agents.contact_extractor import ContactExtractor
 from backend.agents.contact_models import ContactExtractionResult
+from backend.agents.mapping import ProductMappingAgent
+from backend.agents.mapping_models import ProductMapping
 from backend.agents.needs import NeedsAgent
 from backend.agents.needs_models import NeedsAssessment
 from backend.agents.output import AgentOutputInvalid
@@ -82,11 +84,13 @@ from backend.jobs.state import JobState, apply_transition
 from backend.jobs.storage import (
     JobNotFound,
     append_transition,
+    read_briefing,
     record_failure,
     write_briefing,
     write_contacts,
     write_dossier,
     write_needs_assessment,
+    write_product_mapping,
 )
 
 
@@ -115,21 +119,30 @@ _FAIL_CRASHED: str = "crashed"
 # ---------------------------------------------------------------------------
 
 class JobNotInExpectedState(RuntimeError):
-    """Raised when ``run_research`` is invoked on a job not at CREATED.
+    """Raised when an orchestrator entry point is invoked on a job
+    that is not in the state that entry point expects.
 
-    Carries the actual state so callers can route the message. This
-    is *not* a trap — it indicates a programming or operator error
-    (the caller invoked the orchestrator twice, or out of order),
-    not a runaway-cost event.
+    Carries the actual state and (optionally) the expected state so
+    callers can route the message. This is *not* a trap — it
+    indicates a programming or operator error (the caller invoked
+    the orchestrator twice, or out of order), not a runaway-cost
+    event.
     """
 
-    def __init__(self, *, job_id: str, actual: JobState) -> None:
+    def __init__(
+        self,
+        *,
+        job_id: str,
+        actual: JobState,
+        expected: JobState = JobState.CREATED,
+    ) -> None:
         super().__init__(
             f"job {job_id} is in state {actual.value!r}, expected "
-            f"{JobState.CREATED.value!r}"
+            f"{expected.value!r}"
         )
         self.job_id = job_id
         self.actual = actual
+        self.expected = expected
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +244,48 @@ class Orchestrator:
         async with get_job_semaphore():
             return await self._do_run_stage1(
                 job_id=job_id, user_context=user_context
+            )
+
+    async def run_mapping(
+        self,
+        *,
+        job_id: str,
+        knowledge_bundle: str,
+        user_context: str | None = None,
+    ) -> ProductMapping:
+        """Drive the Stage 2 product-mapping agent in place at APPROVED.
+
+        Pre-conditions:
+
+        * the job is at :attr:`JobState.APPROVED` on disk;
+        * ``briefing.json`` exists for the job (the operator-approved
+          briefing — Stage 2 reads only this, never the dossier).
+
+        Behaviour:
+
+        * On success the validated :class:`ProductMapping` is written
+          to ``product_mapping.json`` and returned. ``current_state``
+          stays at ``APPROVED`` and no transition is appended — Step
+          14 keeps ``approved → generating_documents`` closed; a
+          later step will open it once the writers exist.
+        * On any agent failure the orchestrator stamps
+          ``state.json.last_error`` with the matching category,
+          optionally bumps ``Job.trap_triggers`` (for trap fires),
+          and re-raises the original exception unchanged.
+          ``current_state`` is *not* moved off ``APPROVED`` — the
+          operator can retry without re-running Stage 1.
+
+        Wrong-state callers and a missing/corrupt briefing surface
+        their underlying exceptions (:class:`JobNotInExpectedState`,
+        :class:`JobNotFound`, :class:`pydantic.ValidationError`)
+        without writing ``last_error``: those are caller mistakes,
+        not agent failures.
+        """
+        async with get_job_semaphore():
+            return await self._do_run_mapping(
+                job_id=job_id,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
             )
 
     # ------------------------------------------------------------------
@@ -518,6 +573,88 @@ class Orchestrator:
             raise type_exc
         return result
 
+    async def _do_run_mapping(
+        self,
+        *,
+        job_id: str,
+        knowledge_bundle: str,
+        user_context: str | None,
+    ) -> ProductMapping:
+        """Slot-holding inner body for Stage 2 product mapping.
+
+        In-place: the job stays at ``APPROVED`` throughout. No
+        transition is appended on success or failure — only the
+        artefact and (on failure) the ``last_error`` payload move.
+        """
+        state_file = self._load_state(job_id)
+        current = _state_file_state(state_file)
+        if current is not JobState.APPROVED:
+            raise JobNotInExpectedState(
+                job_id=job_id,
+                actual=current,
+                expected=JobState.APPROVED,
+            )
+
+        # Read the approved briefing from disk. A missing or corrupt
+        # briefing is a caller mistake, not an agent failure — let
+        # the underlying JobNotFound / ValidationError propagate
+        # without stamping last_error.
+        briefing = read_briefing(job_id)
+        briefing_json = briefing.model_dump_json()
+
+        agent = ProductMappingAgent(client=self._client, models=self._models)
+
+        try:
+            mapping = await asyncio.to_thread(
+                agent.run,
+                job_id=job_id,
+                company_name=briefing.company_name,
+                company_url=str(briefing.company_url),
+                briefing_json=briefing_json,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+            )
+        except RunawayTrapFired as exc:
+            self._record_mapping_failure(
+                job_id=job_id,
+                category=_FAIL_TRAP,
+                exc=exc,
+                trap_name=exc.__class__.__name__,
+            )
+            raise
+        except AgentOutputInvalid as exc:
+            self._record_mapping_failure(
+                job_id=job_id,
+                category=_FAIL_OUTPUT_INVALID,
+                exc=exc,
+                trap_name=None,
+            )
+            raise
+        except Exception as exc:
+            self._record_mapping_failure(
+                job_id=job_id,
+                category=_FAIL_CRASHED,
+                exc=exc,
+                trap_name=None,
+            )
+            raise
+
+        if not isinstance(mapping, ProductMapping):
+            type_exc = TypeError(
+                f"ProductMappingAgent returned "
+                f"{type(mapping).__name__}, expected ProductMapping"
+            )
+            self._record_mapping_failure(
+                job_id=job_id,
+                category=_FAIL_CRASHED,
+                exc=type_exc,
+                trap_name=None,
+            )
+            raise type_exc
+
+        write_product_mapping(job_id, mapping)
+        return mapping
+
     # ------------------------------------------------------------------
     # State / DB helpers
     # ------------------------------------------------------------------
@@ -616,6 +753,58 @@ class Orchestrator:
         except Exception:
             log.exception(
                 "failed to update Job row on failure",
+                extra={"job_id": job_id, "category": category},
+            )
+
+    def _record_mapping_failure(
+        self,
+        *,
+        job_id: str,
+        category: str,
+        exc: BaseException,
+        trap_name: str | None,
+    ) -> None:
+        """Stamp ``last_error`` for a mapping failure without changing
+        ``current_state``.
+
+        Step 14 keeps the job at :attr:`JobState.APPROVED` across
+        mapping failures so the operator can retry without
+        re-running Stage 1. That means: no ``apply_transition``
+        call, no edit to ``Job.status`` — only ``last_error`` (and
+        ``Job.trap_triggers`` on trap fires) move.
+
+        Best-effort: if a write fails here, log loudly and let the
+        original exception propagate. Losing failure metadata is
+        survivable; losing the signal that the run failed is not.
+        """
+        if isinstance(exc, RunawayTrapFired):
+            details = exc.reason
+        else:
+            details = str(exc) or exc.__class__.__name__
+
+        try:
+            record_failure(job_id, category=category, details=details)
+        except Exception:
+            log.exception(
+                "failed to record last_error on state.json (mapping)",
+                extra={"job_id": job_id, "category": category},
+            )
+
+        if trap_name is None:
+            return
+
+        try:
+            with self._session_factory() as db:
+                job = db.execute(
+                    select(Job).where(Job.id == job_id)
+                ).scalar_one()
+                job.trap_triggers = _append_trap_trigger(
+                    job.trap_triggers, trap_name
+                )
+                db.commit()
+        except Exception:
+            log.exception(
+                "failed to bump Job.trap_triggers (mapping)",
                 extra={"job_id": job_id, "category": category},
             )
 
