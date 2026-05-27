@@ -65,14 +65,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.agents._protocols import CloudClientProtocol
+from backend.agents.benefits import BenefitsWriter
+from backend.agents.benefits_models import BenefitsBrief
 from backend.agents.briefing_compiler import BriefingCompiler
 from backend.agents.briefing_models import Briefing
 from backend.agents.contact_extractor import ContactExtractor
 from backend.agents.contact_models import ContactExtractionResult
+from backend.agents.faq_models import FAQDocument
+from backend.agents.faq_writer import FAQWriter
 from backend.agents.mapping import ProductMappingAgent
 from backend.agents.mapping_models import ProductMapping
 from backend.agents.needs import NeedsAgent
 from backend.agents.needs_models import NeedsAssessment
+from backend.agents.objections_models import ObjectionsRegister
+from backend.agents.objections_writer import ObjectionsWriter
 from backend.agents.output import AgentOutputInvalid
 from backend.agents.research import ResearchAgent
 from backend.agents.research_models import ResearchDossier
@@ -85,11 +91,15 @@ from backend.jobs.storage import (
     JobNotFound,
     append_transition,
     read_briefing,
+    read_product_mapping,
     record_failure,
+    write_benefits,
     write_briefing,
     write_contacts,
     write_dossier,
+    write_faq,
     write_needs_assessment,
+    write_objections,
     write_product_mapping,
 )
 
@@ -287,6 +297,139 @@ class Orchestrator:
                 knowledge_bundle=knowledge_bundle,
                 user_context=user_context,
             )
+
+    async def run_benefits(
+        self,
+        *,
+        job_id: str,
+        knowledge_bundle: str,
+        user_context: str | None = None,
+    ) -> BenefitsBrief:
+        """Drive the Stage 2 :class:`BenefitsWriter` in place at APPROVED.
+
+        First of the three Stage 2 writers (handover §9.2 step 8).
+        Reads the *approved* briefing and the upstream product mapping
+        from disk, serialises both with ``model_dump_json``, runs the
+        writer on a worker thread, and on success writes
+        ``benefits.json``. Wrong-state callers and missing
+        briefing/mapping surface their underlying exceptions
+        (:class:`JobNotInExpectedState`, :class:`JobNotFound`,
+        :class:`pydantic.ValidationError`) without stamping
+        ``last_error`` — those are caller mistakes, not agent
+        failures (same semantics as :meth:`run_mapping`).
+        """
+        async with get_job_semaphore():
+            return await self._do_run_writer(
+                job_id=job_id,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+                agent_cls=BenefitsWriter,
+                expected_type=BenefitsBrief,
+                writer_label="BenefitsWriter",
+                persist=write_benefits,
+            )
+
+    async def run_faq(
+        self,
+        *,
+        job_id: str,
+        knowledge_bundle: str,
+        user_context: str | None = None,
+    ) -> FAQDocument:
+        """Drive the Stage 2 :class:`FAQWriter` in place at APPROVED.
+
+        Second of the three Stage 2 writers. Same pre-flight /
+        in-place / failure-recording semantics as
+        :meth:`run_benefits`. Persists ``faq.json`` on success.
+        """
+        async with get_job_semaphore():
+            return await self._do_run_writer(
+                job_id=job_id,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+                agent_cls=FAQWriter,
+                expected_type=FAQDocument,
+                writer_label="FAQWriter",
+                persist=write_faq,
+            )
+
+    async def run_objections(
+        self,
+        *,
+        job_id: str,
+        knowledge_bundle: str,
+        user_context: str | None = None,
+    ) -> ObjectionsRegister:
+        """Drive the Stage 2 :class:`ObjectionsWriter` in place at APPROVED.
+
+        Third of the three Stage 2 writers. Same pre-flight /
+        in-place / failure-recording semantics as
+        :meth:`run_benefits`. Persists ``objections.json`` on success.
+        """
+        async with get_job_semaphore():
+            return await self._do_run_writer(
+                job_id=job_id,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+                agent_cls=ObjectionsWriter,
+                expected_type=ObjectionsRegister,
+                writer_label="ObjectionsWriter",
+                persist=write_objections,
+            )
+
+    async def run_stage2_writers(
+        self,
+        *,
+        job_id: str,
+        knowledge_bundle: str,
+        user_context: str | None = None,
+    ) -> tuple[BenefitsBrief, FAQDocument, ObjectionsRegister]:
+        """Drive the three Stage 2 writers sequentially in place at APPROVED.
+
+        Order is fixed: benefits → FAQ → objections. The semaphore is
+        held across the full chain so the writers do not contend with
+        themselves for slots between calls. Each writer persists its
+        artefact immediately on success; a downstream writer's failure
+        leaves the upstream artefacts in place on disk for inspection
+        or retry. ``current_state`` stays at ``APPROVED`` throughout
+        (Step 18 keeps ``approved → generating_documents`` closed; a
+        later step will open it once real document generation lands).
+
+        Sequential — not :func:`asyncio.gather` — because Step 18 is
+        fake-only and the :class:`FakeCloudClient` is synchronous; the
+        upgrade to parallel agent calls belongs in the step that
+        adds real Anthropic calls and validates per-job-budget burst
+        behaviour.
+        """
+        async with get_job_semaphore():
+            benefits = await self._do_run_writer(
+                job_id=job_id,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+                agent_cls=BenefitsWriter,
+                expected_type=BenefitsBrief,
+                writer_label="BenefitsWriter",
+                persist=write_benefits,
+            )
+            faq = await self._do_run_writer(
+                job_id=job_id,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+                agent_cls=FAQWriter,
+                expected_type=FAQDocument,
+                writer_label="FAQWriter",
+                persist=write_faq,
+            )
+            objections = await self._do_run_writer(
+                job_id=job_id,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+                agent_cls=ObjectionsWriter,
+                expected_type=ObjectionsRegister,
+                writer_label="ObjectionsWriter",
+                persist=write_objections,
+            )
+            return benefits, faq, objections
 
     # ------------------------------------------------------------------
     # Internals
@@ -655,6 +798,115 @@ class Orchestrator:
         write_product_mapping(job_id, mapping)
         return mapping
 
+    async def _do_run_writer(
+        self,
+        *,
+        job_id: str,
+        knowledge_bundle: str,
+        user_context: str | None,
+        agent_cls: type,
+        expected_type: type,
+        writer_label: str,
+        persist: Callable[[str, Any], Any],
+    ) -> Any:
+        """Slot-holding inner body for any Stage 2 writer.
+
+        Shared body for :meth:`run_benefits`, :meth:`run_faq` and
+        :meth:`run_objections`. The three writers have identical
+        prompt signatures (``company_name``, ``company_url``,
+        ``briefing_json``, ``product_mapping_json``,
+        ``knowledge_bundle``, ``user_context``) and identical
+        in-place-at-APPROVED contracts; the only per-writer variation
+        is the class to instantiate, the expected output type, the
+        failure log label, and the persistence helper. Parameterising
+        avoids triplicating the same try/except/isinstance/persist
+        body — a bug fix in one would otherwise have to be replicated
+        in three places, and they would silently drift.
+
+        Pre-flight failures (wrong state, missing briefing, missing
+        product mapping) surface their underlying exceptions
+        unchanged (:class:`JobNotInExpectedState`,
+        :class:`JobNotFound`, :class:`pydantic.ValidationError`)
+        without stamping ``last_error`` — those are caller mistakes,
+        not writer-agent failures (same semantics as
+        :meth:`_do_run_mapping`).
+        """
+        state_file = self._load_state(job_id)
+        current = _state_file_state(state_file)
+        if current is not JobState.APPROVED:
+            raise JobNotInExpectedState(
+                job_id=job_id,
+                actual=current,
+                expected=JobState.APPROVED,
+            )
+
+        # Read the approved briefing and upstream product mapping.
+        # Missing/corrupt files are caller mistakes — let the
+        # underlying JobNotFound / ValidationError propagate without
+        # stamping last_error.
+        briefing = read_briefing(job_id)
+        product_mapping = read_product_mapping(job_id)
+        briefing_json = briefing.model_dump_json()
+        product_mapping_json = product_mapping.model_dump_json()
+
+        agent = agent_cls(client=self._client, models=self._models)
+
+        try:
+            result = await asyncio.to_thread(
+                agent.run,
+                job_id=job_id,
+                company_name=briefing.company_name,
+                company_url=str(briefing.company_url),
+                briefing_json=briefing_json,
+                product_mapping_json=product_mapping_json,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+            )
+        except RunawayTrapFired as exc:
+            self._record_writer_failure(
+                job_id=job_id,
+                category=_FAIL_TRAP,
+                exc=exc,
+                trap_name=exc.__class__.__name__,
+                writer_label=writer_label,
+            )
+            raise
+        except AgentOutputInvalid as exc:
+            self._record_writer_failure(
+                job_id=job_id,
+                category=_FAIL_OUTPUT_INVALID,
+                exc=exc,
+                trap_name=None,
+                writer_label=writer_label,
+            )
+            raise
+        except Exception as exc:
+            self._record_writer_failure(
+                job_id=job_id,
+                category=_FAIL_CRASHED,
+                exc=exc,
+                trap_name=None,
+                writer_label=writer_label,
+            )
+            raise
+
+        if not isinstance(result, expected_type):
+            type_exc = TypeError(
+                f"{writer_label} returned {type(result).__name__}, "
+                f"expected {expected_type.__name__}"
+            )
+            self._record_writer_failure(
+                job_id=job_id,
+                category=_FAIL_CRASHED,
+                exc=type_exc,
+                trap_name=None,
+                writer_label=writer_label,
+            )
+            raise type_exc
+
+        persist(job_id, result)
+        return result
+
     # ------------------------------------------------------------------
     # State / DB helpers
     # ------------------------------------------------------------------
@@ -806,6 +1058,72 @@ class Orchestrator:
             log.exception(
                 "failed to bump Job.trap_triggers (mapping)",
                 extra={"job_id": job_id, "category": category},
+            )
+
+    def _record_writer_failure(
+        self,
+        *,
+        job_id: str,
+        category: str,
+        exc: BaseException,
+        trap_name: str | None,
+        writer_label: str,
+    ) -> None:
+        """Stamp ``last_error`` for a Stage-2 writer failure without
+        changing ``current_state``.
+
+        Same in-place semantics as :meth:`_record_mapping_failure`:
+        the job stays at :attr:`JobState.APPROVED` across writer
+        failures so the operator can retry without re-running
+        Stage 1. Only ``last_error`` (and ``Job.trap_triggers`` on
+        trap fires) move.
+
+        ``writer_label`` is logged so a failure in the chained
+        :meth:`run_stage2_writers` call can be attributed to the
+        specific writer that crashed — useful when triaging a job
+        where two of three artefacts landed on disk.
+
+        Best-effort: if a write fails here, log loudly and let the
+        original exception propagate. Losing failure metadata is
+        survivable; losing the signal that the run failed is not.
+        """
+        if isinstance(exc, RunawayTrapFired):
+            details = exc.reason
+        else:
+            details = str(exc) or exc.__class__.__name__
+
+        try:
+            record_failure(job_id, category=category, details=details)
+        except Exception:
+            log.exception(
+                "failed to record last_error on state.json (writer)",
+                extra={
+                    "job_id": job_id,
+                    "category": category,
+                    "writer": writer_label,
+                },
+            )
+
+        if trap_name is None:
+            return
+
+        try:
+            with self._session_factory() as db:
+                job = db.execute(
+                    select(Job).where(Job.id == job_id)
+                ).scalar_one()
+                job.trap_triggers = _append_trap_trigger(
+                    job.trap_triggers, trap_name
+                )
+                db.commit()
+        except Exception:
+            log.exception(
+                "failed to bump Job.trap_triggers (writer)",
+                extra={
+                    "job_id": job_id,
+                    "category": category,
+                    "writer": writer_label,
+                },
             )
 
 

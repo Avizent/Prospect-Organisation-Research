@@ -42,10 +42,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
 
+from backend.agents.benefits_models import BenefitsBrief
 from backend.agents.briefing_models import Briefing
 from backend.agents.contact_models import ContactExtractionResult
+from backend.agents.faq_models import FAQDocument
 from backend.agents.mapping_models import ProductMapping
 from backend.agents.needs_models import NeedsAssessment
+from backend.agents.objections_models import ObjectionsRegister
 from backend.agents.research_models import ResearchDossier
 from backend.jobs.state import JobState, TransitionRecord
 
@@ -549,6 +552,126 @@ def read_product_mapping(job_id: str) -> ProductMapping:
         )
     raw = json.loads(path.read_text(encoding="utf-8"))
     return ProductMapping.model_validate(raw)
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 writer artefacts — benefits.json / faq.json / objections.json
+# ---------------------------------------------------------------------------
+#
+# Step 18 adds the three Stage 2 writer artefacts. Each pair mirrors
+# the briefing / product_mapping helpers above: ``model_dump(mode="json")``
+# on the way out so Pydantic handles ``HttpUrl`` / ``date`` / enum →
+# string; full ``model_validate`` on the way in so corruption surfaces
+# as :class:`pydantic.ValidationError` at read time, not deep in a
+# downstream consumer. We do NOT cross-validate the writer artefact's
+# refs against the upstream briefing/mapping at the storage layer —
+# that is the critic's job in a later step (matches the soft contract
+# already used in :func:`read_product_mapping`).
+
+def _benefits_path(job_id: str) -> Path:
+    return job_folder(job_id) / "benefits.json"
+
+
+def write_benefits(job_id: str, benefits: BenefitsBrief) -> Path:
+    """Atomically write the Pydantic benefits brief to disk.
+
+    Returns the path written. ``benefits.json`` is the first of three
+    Stage 2 writer artefacts; the orchestrator (Step 18) calls this
+    immediately after :class:`BenefitsWriter` succeeds so a downstream
+    writer failure leaves the brief in place for retry / inspection.
+    """
+    create_job_folder(job_id)
+    payload = benefits.model_dump(mode="json")
+    target = _benefits_path(job_id)
+    _atomic_write_json(target, payload)
+    return target
+
+
+def read_benefits(job_id: str) -> BenefitsBrief:
+    """Read and Pydantic-validate ``benefits.json``.
+
+    Same exception contract as :func:`read_briefing`. The
+    :class:`BenefitsBrief` model-level validators (audience-matches-
+    section and non-negative refs) run on :meth:`model_validate`, so
+    a hand-edited brief with broken audience/refs fails here on
+    reload — never silently rendering a broken section in the PDF.
+    """
+    path = _benefits_path(job_id)
+    if not path.exists():
+        raise JobNotFound(f"benefits.json not found for job {job_id}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return BenefitsBrief.model_validate(raw)
+
+
+def _faq_path(job_id: str) -> Path:
+    return job_folder(job_id) / "faq.json"
+
+
+def write_faq(job_id: str, faq: FAQDocument) -> Path:
+    """Atomically write the Pydantic FAQ document to disk.
+
+    Returns the path written. Second of three Stage 2 writer artefacts;
+    same per-writer immediate-persistence contract as
+    :func:`write_benefits`.
+    """
+    create_job_folder(job_id)
+    payload = faq.model_dump(mode="json")
+    target = _faq_path(job_id)
+    _atomic_write_json(target, payload)
+    return target
+
+
+def read_faq(job_id: str) -> FAQDocument:
+    """Read and Pydantic-validate ``faq.json``.
+
+    Same exception contract as :func:`read_briefing`. The
+    :class:`FAQDocument` cardinality bounds (12-15 entries) and
+    closed-enum / non-negative-refs validators all run on
+    :meth:`model_validate`, so a hand-edited FAQ that violates the
+    contract fails here on reload.
+    """
+    path = _faq_path(job_id)
+    if not path.exists():
+        raise JobNotFound(f"faq.json not found for job {job_id}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return FAQDocument.model_validate(raw)
+
+
+def _objections_path(job_id: str) -> Path:
+    return job_folder(job_id) / "objections.json"
+
+
+def write_objections(
+    job_id: str, objections: ObjectionsRegister
+) -> Path:
+    """Atomically write the Pydantic objections register to disk.
+
+    Returns the path written. Third of three Stage 2 writer artefacts;
+    same per-writer immediate-persistence contract as
+    :func:`write_benefits`.
+    """
+    create_job_folder(job_id)
+    payload = objections.model_dump(mode="json")
+    target = _objections_path(job_id)
+    _atomic_write_json(target, payload)
+    return target
+
+
+def read_objections(job_id: str) -> ObjectionsRegister:
+    """Read and Pydantic-validate ``objections.json``.
+
+    Same exception contract as :func:`read_briefing`. The
+    :class:`ObjectionsRegister` cardinality bounds (15-20 rows),
+    closed-enum, non-empty escalation_path, and non-negative-refs
+    validators all run on :meth:`model_validate`, so a hand-edited
+    register that violates the contract fails here on reload — never
+    silently rendering a blank cell or broken citation in the XLSX.
+    """
+    path = _objections_path(job_id)
+    if not path.exists():
+        raise JobNotFound(f"objections.json not found for job {job_id}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return ObjectionsRegister.model_validate(raw)
 
 
 # ---------------------------------------------------------------------------
