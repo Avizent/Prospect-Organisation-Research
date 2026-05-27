@@ -42,6 +42,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
 
+from backend.agents.briefing_models import Briefing
+from backend.agents.contact_models import ContactExtractionResult
+from backend.agents.needs_models import NeedsAssessment
 from backend.agents.research_models import ResearchDossier
 from backend.jobs.state import JobState, TransitionRecord
 
@@ -378,6 +381,130 @@ def read_dossier(job_id: str) -> ResearchDossier:
         raise JobNotFound(f"research_dossier.json not found for job {job_id}")
     raw = json.loads(path.read_text(encoding="utf-8"))
     return ResearchDossier.model_validate(raw)
+
+
+# ---------------------------------------------------------------------------
+# contacts.json
+# ---------------------------------------------------------------------------
+#
+# Step 9a adds three more job-folder artefacts. Each pair mirrors the
+# dossier helpers above: ``model_dump(mode="json")`` on the way out so
+# Pydantic handles ``HttpUrl`` / ``date`` / enum → string; full
+# ``model_validate`` on the way in so corruption surfaces as
+# ``ValidationError`` at read time, not deep in a downstream consumer.
+# We do NOT cross-validate the artefact's ``company_name`` against
+# ``state.json`` — the readers are stateless by design (see Step 9a
+# plan, design decision 4).
+
+def _contacts_path(job_id: str) -> Path:
+    return job_folder(job_id) / "contacts.json"
+
+
+def write_contacts(
+    job_id: str, contacts: ContactExtractionResult
+) -> Path:
+    """Atomically write the Pydantic contact extraction result to disk.
+
+    Returns the path written. The folder is created if absent —
+    intake-side races on rare error paths should not cause this helper
+    to raise.
+    """
+    create_job_folder(job_id)
+    payload = contacts.model_dump(mode="json")
+    target = _contacts_path(job_id)
+    _atomic_write_json(target, payload)
+    return target
+
+
+def read_contacts(job_id: str) -> ContactExtractionResult:
+    """Read and Pydantic-validate ``contacts.json``.
+
+    Raises :class:`JobNotFound` if the file is missing. A malformed
+    JSON file raises :class:`json.JSONDecodeError`; a schema-invalid
+    payload raises :class:`pydantic.ValidationError`. Neither is
+    caught here — Step 9a is storage-only; recovery belongs to the
+    orchestrator.
+    """
+    path = _contacts_path(job_id)
+    if not path.exists():
+        raise JobNotFound(f"contacts.json not found for job {job_id}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return ContactExtractionResult.model_validate(raw)
+
+
+# ---------------------------------------------------------------------------
+# needs_assessment.json
+# ---------------------------------------------------------------------------
+
+def _needs_assessment_path(job_id: str) -> Path:
+    return job_folder(job_id) / "needs_assessment.json"
+
+
+def write_needs_assessment(
+    job_id: str, assessment: NeedsAssessment
+) -> Path:
+    """Atomically write the Pydantic needs assessment to disk.
+
+    Returns the path written.
+    """
+    create_job_folder(job_id)
+    payload = assessment.model_dump(mode="json")
+    target = _needs_assessment_path(job_id)
+    _atomic_write_json(target, payload)
+    return target
+
+
+def read_needs_assessment(job_id: str) -> NeedsAssessment:
+    """Read and Pydantic-validate ``needs_assessment.json``.
+
+    Same exception contract as :func:`read_contacts`.
+    """
+    path = _needs_assessment_path(job_id)
+    if not path.exists():
+        raise JobNotFound(
+            f"needs_assessment.json not found for job {job_id}"
+        )
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return NeedsAssessment.model_validate(raw)
+
+
+# ---------------------------------------------------------------------------
+# briefing.json
+# ---------------------------------------------------------------------------
+
+def _briefing_path(job_id: str) -> Path:
+    return job_folder(job_id) / "briefing.json"
+
+
+def write_briefing(job_id: str, briefing: Briefing) -> Path:
+    """Atomically write the Pydantic briefing to disk.
+
+    Returns the path written. ``briefing.json`` is the load-bearing
+    artefact for the human approval gate — Stage 2 writers read the
+    *approved* (post-edit) version, never the dossier. See handover
+    §9.2 step 5.
+    """
+    create_job_folder(job_id)
+    payload = briefing.model_dump(mode="json")
+    target = _briefing_path(job_id)
+    _atomic_write_json(target, payload)
+    return target
+
+
+def read_briefing(job_id: str) -> Briefing:
+    """Read and Pydantic-validate ``briefing.json``.
+
+    Same exception contract as :func:`read_contacts`. Importantly,
+    the :class:`Briefing` top-level validator runs on
+    :meth:`model_validate`, so a hand-edited briefing whose
+    ``source_indices`` point outside ``sources.entries`` will fail
+    here on reload — not silently render a broken citation.
+    """
+    path = _briefing_path(job_id)
+    if not path.exists():
+        raise JobNotFound(f"briefing.json not found for job {job_id}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return Briefing.model_validate(raw)
 
 
 # ---------------------------------------------------------------------------

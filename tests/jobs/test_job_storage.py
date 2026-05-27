@@ -20,6 +20,9 @@ from pathlib import Path
 
 import pytest
 
+from backend.agents.briefing_models import Briefing, LabMaturity
+from backend.agents.contact_models import ContactExtractionResult
+from backend.agents.needs_models import NeedsAssessment
 from backend.agents.research_models import ResearchDossier
 from backend.jobs.state import JobState, TransitionRecord
 from backend.jobs.storage import (
@@ -28,11 +31,17 @@ from backend.jobs.storage import (
     create_job_folder,
     job_folder,
     jobs_root,
+    read_briefing,
+    read_contacts,
     read_dossier,
+    read_needs_assessment,
     read_state,
     record_failure,
+    write_briefing,
+    write_contacts,
     write_dossier,
     write_initial_state,
+    write_needs_assessment,
 )
 
 
@@ -455,3 +464,296 @@ def test_record_failure_overwrites_previous_last_error(
     record_failure(job_id, category="output_invalid", details="first")
     updated = record_failure(job_id, category="crashed", details="second")
     assert updated.last_error == {"category": "crashed", "details": "second"}
+
+
+# ---------------------------------------------------------------------------
+# contacts.json round-trip
+# ---------------------------------------------------------------------------
+
+def test_write_contacts_persists_to_disk_and_reads_back(
+    isolated_jobs_root: Path,
+    sample_contacts: ContactExtractionResult,
+) -> None:
+    job_id = _new_job_id()
+    path = write_contacts(job_id, sample_contacts)
+    assert path == isolated_jobs_root / job_id / "contacts.json"
+    assert path.exists()
+
+    rebuilt = read_contacts(job_id)
+    assert isinstance(rebuilt, ContactExtractionResult)
+    assert rebuilt.company_name == "Acme Ltd"
+    assert len(rebuilt.contacts) == 1
+    assert rebuilt.contacts[0].email == "alice@acme.example.com"
+
+
+def test_write_contacts_creates_folder_if_absent(
+    isolated_jobs_root: Path,
+    sample_contacts: ContactExtractionResult,
+) -> None:
+    job_id = _new_job_id()
+    # Intentionally skip create_job_folder.
+    path = write_contacts(job_id, sample_contacts)
+    assert path.exists()
+
+
+def test_write_contacts_leaves_no_tmp_file_behind(
+    isolated_jobs_root: Path,
+    sample_contacts: ContactExtractionResult,
+) -> None:
+    job_id = _new_job_id()
+    write_contacts(job_id, sample_contacts)
+    folder = isolated_jobs_root / job_id
+    assert list(folder.glob("*.tmp")) == []
+
+
+def test_read_contacts_raises_when_missing(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    create_job_folder(job_id)
+    with pytest.raises(JobNotFound):
+        read_contacts(job_id)
+
+
+def test_read_contacts_raises_validation_error_on_schema_invalid_file(
+    isolated_jobs_root: Path,
+) -> None:
+    """A schema-invalid file surfaces as Pydantic ``ValidationError``,
+    not a half-shaped object — caller decides how to react."""
+    job_id = _new_job_id()
+    folder = create_job_folder(job_id)
+    # Missing required ``contacts`` and ``gaps`` lists for the schema.
+    (folder / "contacts.json").write_text(
+        json.dumps({"company_name": "Acme Ltd", "contacts": "nope"}),
+        encoding="utf-8",
+    )
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        read_contacts(job_id)
+
+
+def test_read_contacts_raises_json_decode_error_on_malformed_file(
+    isolated_jobs_root: Path,
+) -> None:
+    """Malformed JSON must surface as ``json.JSONDecodeError`` — Step 9a
+    readers do not catch or swallow it."""
+    job_id = _new_job_id()
+    folder = create_job_folder(job_id)
+    (folder / "contacts.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        read_contacts(job_id)
+
+
+# ---------------------------------------------------------------------------
+# needs_assessment.json round-trip
+# ---------------------------------------------------------------------------
+
+def test_write_needs_assessment_persists_to_disk_and_reads_back(
+    isolated_jobs_root: Path,
+    sample_needs_assessment: NeedsAssessment,
+) -> None:
+    job_id = _new_job_id()
+    path = write_needs_assessment(job_id, sample_needs_assessment)
+    assert path == isolated_jobs_root / job_id / "needs_assessment.json"
+    assert path.exists()
+
+    rebuilt = read_needs_assessment(job_id)
+    assert isinstance(rebuilt, NeedsAssessment)
+    assert rebuilt.company_name == "Acme Ltd"
+    # LabMaturity is a (str, Enum) subclass — pin that the enum
+    # identity round-trips through the JSON layer.
+    from backend.agents.needs_models import LabMaturity as NeedsLabMaturity
+
+    assert rebuilt.lab_maturity is NeedsLabMaturity.MATURE
+    assert len(rebuilt.needs) == 1
+    assert rebuilt.needs[0].priority == 1
+
+
+def test_write_needs_assessment_creates_folder_if_absent(
+    isolated_jobs_root: Path,
+    sample_needs_assessment: NeedsAssessment,
+) -> None:
+    job_id = _new_job_id()
+    path = write_needs_assessment(job_id, sample_needs_assessment)
+    assert path.exists()
+
+
+def test_write_needs_assessment_leaves_no_tmp_file_behind(
+    isolated_jobs_root: Path,
+    sample_needs_assessment: NeedsAssessment,
+) -> None:
+    job_id = _new_job_id()
+    write_needs_assessment(job_id, sample_needs_assessment)
+    folder = isolated_jobs_root / job_id
+    assert list(folder.glob("*.tmp")) == []
+
+
+def test_read_needs_assessment_raises_when_missing(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    create_job_folder(job_id)
+    with pytest.raises(JobNotFound):
+        read_needs_assessment(job_id)
+
+
+def test_read_needs_assessment_raises_validation_error_on_schema_invalid_file(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    folder = create_job_folder(job_id)
+    # ``lab_maturity`` outside the frozen four-value enum.
+    (folder / "needs_assessment.json").write_text(
+        json.dumps({"company_name": "Acme Ltd", "lab_maturity": "advanced"}),
+        encoding="utf-8",
+    )
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        read_needs_assessment(job_id)
+
+
+def test_read_needs_assessment_raises_json_decode_error_on_malformed_file(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    folder = create_job_folder(job_id)
+    (folder / "needs_assessment.json").write_text(
+        "{not json", encoding="utf-8"
+    )
+    with pytest.raises(json.JSONDecodeError):
+        read_needs_assessment(job_id)
+
+
+# ---------------------------------------------------------------------------
+# briefing.json round-trip
+# ---------------------------------------------------------------------------
+
+def test_write_briefing_persists_to_disk_and_reads_back(
+    isolated_jobs_root: Path,
+    sample_briefing: Briefing,
+) -> None:
+    job_id = _new_job_id()
+    path = write_briefing(job_id, sample_briefing)
+    assert path == isolated_jobs_root / job_id / "briefing.json"
+    assert path.exists()
+
+    rebuilt = read_briefing(job_id)
+    assert isinstance(rebuilt, Briefing)
+    assert rebuilt.company_name == "Acme Ltd"
+    assert rebuilt.snapshot.lab_maturity is LabMaturity.MODERNISATION_IN_PROGRESS
+    assert rebuilt.business_context.news[0].source_indices == [0]
+    assert rebuilt.key_people.contacts[0].source_index == 0
+    assert rebuilt.opportunity.ranked_needs[0].priority == 1
+
+
+def test_write_briefing_creates_folder_if_absent(
+    isolated_jobs_root: Path,
+    sample_briefing: Briefing,
+) -> None:
+    job_id = _new_job_id()
+    path = write_briefing(job_id, sample_briefing)
+    assert path.exists()
+
+
+def test_write_briefing_leaves_no_tmp_file_behind(
+    isolated_jobs_root: Path,
+    sample_briefing: Briefing,
+) -> None:
+    job_id = _new_job_id()
+    write_briefing(job_id, sample_briefing)
+    folder = isolated_jobs_root / job_id
+    assert list(folder.glob("*.tmp")) == []
+
+
+def test_read_briefing_raises_when_missing(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    create_job_folder(job_id)
+    with pytest.raises(JobNotFound):
+        read_briefing(job_id)
+
+
+def test_read_briefing_raises_validation_error_on_schema_invalid_file(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    folder = create_job_folder(job_id)
+    # Missing every required section; Pydantic should reject.
+    (folder / "briefing.json").write_text(
+        json.dumps({"company_name": "Acme Ltd"}), encoding="utf-8"
+    )
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        read_briefing(job_id)
+
+
+def test_read_briefing_raises_validation_error_on_out_of_range_source_index(
+    isolated_jobs_root: Path,
+    sample_briefing: Briefing,
+) -> None:
+    """The Step 8c top-level validator runs on ``model_validate``, so a
+    hand-edited briefing whose ``source_indices`` point past the end of
+    ``sources.entries`` fails on reload — not silently render a broken
+    citation."""
+    job_id = _new_job_id()
+    write_briefing(job_id, sample_briefing)
+    folder = isolated_jobs_root / job_id
+    raw = json.loads((folder / "briefing.json").read_text("utf-8"))
+    # The sample has 1 source entry; point an index at 5.
+    raw["business_context"]["news"][0]["source_indices"] = [5]
+    (folder / "briefing.json").write_text(
+        json.dumps(raw), encoding="utf-8"
+    )
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        read_briefing(job_id)
+
+
+def test_read_briefing_raises_json_decode_error_on_malformed_file(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    folder = create_job_folder(job_id)
+    (folder / "briefing.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        read_briefing(job_id)
+
+
+# ---------------------------------------------------------------------------
+# Each artefact uses its own filename — no accidental collisions
+# ---------------------------------------------------------------------------
+
+def test_all_four_artefacts_coexist_in_same_job_folder(
+    isolated_jobs_root: Path,
+    sample_dossier: ResearchDossier,
+    sample_contacts: ContactExtractionResult,
+    sample_needs_assessment: NeedsAssessment,
+    sample_briefing: Briefing,
+) -> None:
+    """A job that has run end-of-Stage-1 carries four artefacts side
+    by side. Pin that the filenames don't collide and each reader
+    pulls back the right object."""
+    job_id = _new_job_id()
+    write_dossier(job_id, sample_dossier)
+    write_contacts(job_id, sample_contacts)
+    write_needs_assessment(job_id, sample_needs_assessment)
+    write_briefing(job_id, sample_briefing)
+
+    folder = isolated_jobs_root / job_id
+    on_disk = sorted(p.name for p in folder.iterdir())
+    assert on_disk == [
+        "briefing.json",
+        "contacts.json",
+        "needs_assessment.json",
+        "research_dossier.json",
+    ]
+
+    assert isinstance(read_dossier(job_id), ResearchDossier)
+    assert isinstance(read_contacts(job_id), ContactExtractionResult)
+    assert isinstance(read_needs_assessment(job_id), NeedsAssessment)
+    assert isinstance(read_briefing(job_id), Briefing)

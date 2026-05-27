@@ -24,6 +24,31 @@ from alembic import command as alembic_command
 from alembic.config import Config
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.agents.briefing_models import (
+    Briefing,
+    BriefingClaim,
+    BriefingContact,
+    BusinessContext,
+    ItLandscape,
+    KeyPeople,
+    Opportunity,
+    RankedNeed,
+    Snapshot,
+    SourceEntry,
+    SourceRegister,
+)
+from backend.agents.contact_models import (
+    ContactCandidate,
+    ContactExtractionResult,
+    Function,
+    Seniority,
+)
+from backend.agents.needs_models import (
+    EvidencePointer,
+    IdentifiedNeed,
+    LabMaturity,
+    NeedsAssessment,
+)
 from backend.agents.research_models import (
     Confidence,
     Finding,
@@ -117,4 +142,175 @@ def sample_dossier() -> ResearchDossier:
             )
         ],
         gaps=["no public regulatory information found"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sample ContactExtractionResult
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def sample_contacts() -> ContactExtractionResult:
+    """A populated :class:`ContactExtractionResult` built from literals.
+
+    One contact with a corporate email so the personal-email validator
+    passes; one source URL; ``Confidence.HIGH``. No agent involved —
+    Step 9a is storage-only.
+    """
+    return ContactExtractionResult(
+        company_name="Acme Ltd",
+        contacts=[
+            ContactCandidate(
+                name="Alice Example",
+                job_title="Chief Technology Officer",
+                country="United Kingdom",
+                linkedin_url="https://www.linkedin.com/in/alice-example/",  # type: ignore[arg-type]
+                email="alice@acme.example.com",
+                seniority=Seniority.C_LEVEL,
+                function=Function.CTO,
+                source_url="https://acme.example.com/about",  # type: ignore[arg-type]
+                source_title="Acme Ltd — leadership",
+                retrieved_at=date(2026, 5, 27),
+                confidence=Confidence.HIGH,
+            )
+        ],
+        gaps=["no security-executive contact found"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sample NeedsAssessment
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def sample_needs_assessment() -> NeedsAssessment:
+    """A populated :class:`NeedsAssessment` built from literals.
+
+    ``lab_maturity = MATURE`` plus one :class:`IdentifiedNeed` with
+    one :class:`EvidencePointer` — enough to exercise the nested
+    Pydantic types (HttpUrl, date, Confidence enum) on round-trip.
+    """
+    pointer = EvidencePointer(
+        summary="Job posting for Head of SD-WAN dated 2026-04-01.",
+        source_url="https://acme.example.com/jobs/sdwan",  # type: ignore[arg-type]
+        source_title="Head of SD-WAN — Acme Ltd",
+        retrieved_at=date(2026, 5, 27),
+        confidence=Confidence.HIGH,
+    )
+    return NeedsAssessment(
+        company_name="Acme Ltd",
+        lab_maturity=LabMaturity.MATURE,
+        lab_maturity_reasoning=(
+            "Named CTO, stable vendor footprint, no transformation "
+            "programme visible."
+        ),
+        lab_maturity_evidence=[pointer],
+        lab_maturity_confidence=Confidence.MEDIUM,
+        needs=[
+            IdentifiedNeed(
+                summary="Modernise SD-WAN footprint",
+                detail=(
+                    "Press releases and job postings indicate a stalled "
+                    "SD-WAN rollout that ANS could accelerate."
+                ),
+                priority=1,
+                evidence=[pointer],
+                confidence=Confidence.HIGH,
+            )
+        ],
+        gaps=[],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sample Briefing
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def sample_briefing() -> Briefing:
+    """A populated :class:`Briefing` with one source entry and one
+    claim/contact/need each citing index 0.
+
+    Built from literals so storage round-trip tests can exercise the
+    nested types (HttpUrl, date, enums) and the top-level
+    ``source_indices`` range validator.
+    """
+    sources = SourceRegister(
+        entries=[
+            SourceEntry(
+                url="https://acme.example.com/news/cloud",  # type: ignore[arg-type]
+                title="Acme migrates to cloud",
+                retrieved_at=date(2026, 5, 27),
+                confidence=Confidence.HIGH,
+            )
+        ],
+        gaps=[],
+    )
+    return Briefing(
+        company_name="Acme Ltd",
+        company_url="https://acme.example.com/",  # type: ignore[arg-type]
+        compiled_at=date(2026, 5, 27),
+        snapshot=Snapshot(
+            headline="Acme Ltd — modernising network",
+            one_line_desc="Industrial controls manufacturer.",
+            sector="Industrial manufacturing",
+            headcount_band="1000-5000",
+            hq_country="United Kingdom",
+            ownership="Private",
+            lab_maturity=LabMaturity.MODERNISATION_IN_PROGRESS,
+            why_interesting_to_ans=(
+                "Active SD-WAN job postings align with ANS's network "
+                "refresh proposition."
+            ),
+            confidence=Confidence.HIGH,
+        ),
+        business_context=BusinessContext(
+            news=[
+                BriefingClaim(
+                    summary="Acme announces cloud migration.",
+                    detail="24-month migration programme.",
+                    confidence=Confidence.HIGH,
+                    source_indices=[0],
+                )
+            ],
+        ),
+        it_landscape=ItLandscape(
+            lab_maturity_reasoning=(
+                "Active SD-WAN job postings plus zero-trust vendor "
+                "case study."
+            ),
+        ),
+        key_people=KeyPeople(
+            contacts=[
+                BriefingContact(
+                    name="Alice Example",
+                    job_title="CTO",
+                    function="CTO",
+                    seniority="C_LEVEL",
+                    confidence=Confidence.HIGH,
+                    source_index=0,
+                )
+            ],
+        ),
+        opportunity=Opportunity(
+            ranked_needs=[
+                RankedNeed(
+                    priority=1,
+                    summary="Modernise SD-WAN",
+                    detail=(
+                        "Open Head of SD-WAN posting indicates an "
+                        "in-flight programme ANS could accelerate."
+                    ),
+                    suggested_products=["SD-WAN replacement"],
+                    entry_angle="Lead with SD-WAN refresh.",
+                    watch_outs=["Existing incumbent contract."],
+                    confidence=Confidence.HIGH,
+                    source_indices=[0],
+                )
+            ],
+            buying_cycle_stage="Evaluating",
+            recommended_angle="Lead with the SD-WAN refresh angle.",
+            watch_outs=[],
+        ),
+        sources=sources,
     )
