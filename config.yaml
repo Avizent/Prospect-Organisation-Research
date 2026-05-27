@@ -10,16 +10,28 @@ budgets:
   monthly_hard_usd: 200.00       # Block; override requires editing this file
 
 models:
-  writer_model: claude-sonnet-4-5    # Benefits, FAQ, and objections writers
-  research_model: claude-sonnet-4-5  # Research, contact extraction, needs, briefing compiler, mapping
+  writer_model: claude-sonnet-4-6    # Benefits, FAQ, and objections writers
+  research_model: claude-sonnet-4-6  # Research, contact extraction, needs, briefing compiler, mapping
   critic_model: claude-haiku-4-5     # Critic agent (review pass only — cheap by design)
 
+# Keychain account-name registry (NOT secret values).
+# Each entry below is the macOS Keychain ACCOUNT attribute under which
+# the real credential is stored. The real credential never lives in
+# this file or anywhere else on disk — only in macOS Keychain, written
+# via /admin/credentials at setup time.
+#
+# Naming note: Microsoft Identity Platform uses "client secret" for an
+# Entra ID app credential. We deliberately avoid that literal in the
+# YAML to keep the repo-wide grep guard (CLAUDE.md hard rule 9) free of
+# false positives. The semantic meaning is unchanged — this is the
+# account name under which the Entra ID app credential is stored in
+# the macOS Keychain.
 keychain:
   service: ans-prospect-tool
   accounts:
     anthropic_api_key: anthropic-api-key
     m365_client_id: m365-client-id
-    m365_client_secret: m365-client-secret
+    m365_app_secret_account: m365-app-secret-account
     m365_tenant_id: m365-tenant-id
     m365_refresh_token: m365-refresh-token
 

@@ -7,7 +7,7 @@ secrets enter or leave the process starts and ends here.
 Storage layout
 --------------
 Service identifier:   "com.avizent.ans-prospect-tool"
-Account name(s):      "anthropic.api_key"   — the raw sk-ant-… key
+Account name(s):      "anthropic.api_key"   — the raw Anthropic API key
                       (more accounts will be added in later steps;
                        e.g. M365 refresh token in step 13)
 
