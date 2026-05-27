@@ -142,6 +142,21 @@ class BaseAgent(ABC):
     # Prompts — subclass surface
     # ------------------------------------------------------------------
 
+    def tools(self) -> list[dict[str, Any]] | None:
+        """Return the tool list this agent is allowed to use, or ``None``.
+
+        Default: ``None`` — the vast majority of agents (needs, contact
+        extraction, briefing compiler, mapping, writers, critic) are
+        text-in / JSON-out and never see a tool block. Step 6b's
+        :class:`ResearchAgent` overrides this to declare its
+        ``web_search`` / ``web_fetch`` server tools.
+
+        Returning a list (even an empty one) signals "this agent uses
+        tools" — the wrapper will allocate a ``tool_use_counts`` dict
+        so Trap 2 (per-tool ceilings) is enforced by the cloud client.
+        """
+        return None
+
     @abstractmethod
     def system_prompt(self) -> str:
         """Return the agent's system prompt.
@@ -189,6 +204,12 @@ class BaseAgent(ABC):
         system_text = self.system_prompt()
         user_text = self.user_prompt(**inputs)
 
+        # Resolve tools once, outside the retry loop. The counts dict
+        # is allocated once so Trap 2 accounting accumulates across
+        # both attempts — a retry must not reset the per-job tool spend.
+        tools = self.tools()
+        tool_use_counts: dict[str, int] | None = {} if tools is not None else None
+
         last_reason = "no attempts made"
         last_errors: list[Any] = []
 
@@ -219,6 +240,8 @@ class BaseAgent(ABC):
                 messages=messages,
                 max_tokens=MAX_TOKENS[self.name],
                 input_tokens_estimate=estimate,
+                tools=tools,
+                tool_use_counts=tool_use_counts,
             )
 
             try:
