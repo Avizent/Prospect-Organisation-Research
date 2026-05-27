@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from backend.auth.routes import (
     KEY_PASSWORD_HASH,
+    KEY_RECOVERY_EMAIL,
     KEY_SETUP_COMPLETED_AT,
     KEY_USERNAME,
     _hash_reset_token,
@@ -91,6 +92,69 @@ def test_setup_rejects_invalid_recovery_email(client: TestClient) -> None:
         },
     )
     assert r.status_code == 400
+
+
+def test_setup_succeeds_without_recovery_email(
+    client: TestClient, db_session
+) -> None:
+    """Recovery email is optional: setup must succeed when it's omitted,
+    and no auth.recovery_email row should be written."""
+    r = client.post(
+        "/auth/setup",
+        json={
+            "username": VALID_USERNAME,
+            "password": VALID_PASSWORD,
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    assert db_session.get(Setting, KEY_USERNAME).value == VALID_USERNAME
+    assert db_session.get(Setting, KEY_PASSWORD_HASH) is not None
+    assert db_session.get(Setting, KEY_SETUP_COMPLETED_AT) is not None
+    # No recovery email persisted when omitted.
+    assert db_session.get(Setting, KEY_RECOVERY_EMAIL) is None
+
+
+def test_setup_succeeds_with_empty_recovery_email(
+    client: TestClient, db_session
+) -> None:
+    """An explicit empty string is treated the same as omission."""
+    r = client.post(
+        "/auth/setup",
+        json={
+            "username": VALID_USERNAME,
+            "password": VALID_PASSWORD,
+            "recovery_email": "",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert db_session.get(Setting, KEY_RECOVERY_EMAIL) is None
+
+
+def test_forgot_silently_noops_when_no_recovery_email(
+    client: TestClient, db_session
+) -> None:
+    """If setup ran without a recovery email, /forgot must return the
+    generic message and create no PasswordReset row."""
+    r = client.post(
+        "/auth/setup",
+        json={
+            "username": VALID_USERNAME,
+            "password": VALID_PASSWORD,
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    r2 = client.post("/auth/forgot", json={"username": VALID_USERNAME})
+    assert r2.status_code == 200
+    assert "reset link" in r2.json()["message"]
+
+    # No reset token should have been created.
+    db_session.expire_all()
+    count = db_session.execute(
+        sa.select(sa.func.count()).select_from(PasswordReset)
+    ).scalar_one()
+    assert count == 0
 
 
 def test_setup_404_after_completion(completed_setup: TestClient) -> None:

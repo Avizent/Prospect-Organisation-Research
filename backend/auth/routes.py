@@ -239,7 +239,7 @@ def _send_reset_email(recovery_email: str) -> None:
 class SetupBody(BaseModel):
     username: str
     password: str
-    recovery_email: str
+    recovery_email: str | None = None
 
 
 class GenericMessage(BaseModel):
@@ -274,11 +274,13 @@ def setup(
         )
 
     username = body.username.strip()
-    recovery_email = body.recovery_email.strip()
+    recovery_email = (body.recovery_email or "").strip()
 
     if not username:
         raise HTTPException(status_code=400, detail="Username required")
-    if "@" not in recovery_email or "." not in recovery_email:
+    # Recovery email is optional. If provided, it must look like an email;
+    # /forgot will silently no-op when no recovery email is set.
+    if recovery_email and ("@" not in recovery_email or "." not in recovery_email):
         raise HTTPException(
             status_code=400, detail="A valid recovery email is required"
         )
@@ -292,7 +294,8 @@ def setup(
 
     _put_setting(db, KEY_USERNAME, username)
     _put_setting(db, KEY_PASSWORD_HASH, hash_password(body.password))
-    _put_setting(db, KEY_RECOVERY_EMAIL, recovery_email)
+    if recovery_email:
+        _put_setting(db, KEY_RECOVERY_EMAIL, recovery_email)
     _put_setting(db, KEY_SETUP_COMPLETED_AT, _now().isoformat())
     db.commit()
 
