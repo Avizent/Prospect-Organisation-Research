@@ -49,6 +49,15 @@ _DEFAULT_BUDGETS: dict[str, float] = {
 
 _DEFAULT_CONCURRENCY_MAX_JOBS: int = 3
 
+# Defaults for the ``models:`` section. Must match config.yaml literally;
+# treated as a safety net only. Step 6a added this so agents can resolve
+# their model id from a typed dataclass rather than parsing YAML themselves.
+_DEFAULT_MODELS: dict[str, str] = {
+    "writer_model": "claude-sonnet-4-6",
+    "research_model": "claude-sonnet-4-6",
+    "critic_model": "claude-haiku-4-5",
+}
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses returned to callers
@@ -68,6 +77,21 @@ class Budgets:
 @dataclass(frozen=True)
 class Concurrency:
     max_concurrent_jobs: int
+
+
+@dataclass(frozen=True)
+class Models:
+    """Resolved model id for each agent role.
+
+    Attribute names are the *role* strings agents declare via
+    ``BaseAgent.role``; an agent looks up its model with
+    ``getattr(models, self.role)``. Adding a new role here means adding
+    a matching ``Literal`` member to ``backend.agents.base.AgentRole``.
+    """
+
+    writer_model: str
+    research_model: str
+    critic_model: str
 
 
 # ---------------------------------------------------------------------------
@@ -190,3 +214,35 @@ def concurrency(path: Path | None = None) -> Concurrency:
         )
         max_jobs = _DEFAULT_CONCURRENCY_MAX_JOBS
     return Concurrency(max_concurrent_jobs=max_jobs)
+
+
+def models(path: Path | None = None) -> Models:
+    """Return the resolved :class:`Models` (model id per role).
+
+    Missing keys fall back to :data:`_DEFAULT_MODELS`. Non-string values
+    trigger a stderr warning and the default. The result is frozen so
+    callers cannot accidentally mutate global config.
+
+    Agents use this to resolve their model: ``getattr(models, role)``.
+    Step 6a added this; Step 6b's :class:`ResearchAgent` is the first
+    consumer, and every later agent follows the same lookup.
+    """
+    raw = _load_raw(path) if path is not None else _cached_raw()
+    section = raw.get("models") or {}
+
+    def _read(key: str) -> str:
+        value = section.get(key, _DEFAULT_MODELS[key])
+        if not isinstance(value, str) or not value.strip():
+            print(
+                f"warning: config models.{key}={value!r} is not a non-empty "
+                f"string; using default {_DEFAULT_MODELS[key]!r}",
+                file=sys.stderr,
+            )
+            return _DEFAULT_MODELS[key]
+        return value
+
+    return Models(
+        writer_model=_read("writer_model"),
+        research_model=_read("research_model"),
+        critic_model=_read("critic_model"),
+    )
