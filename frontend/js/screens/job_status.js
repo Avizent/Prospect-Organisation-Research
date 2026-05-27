@@ -99,11 +99,15 @@ export async function render(container, params) {
       ])),
     ]);
     const tbody = el("tbody");
+    // state.json writes transition records with keys "from" and
+    // "to" (see backend.jobs.storage.append_transition) — NOT
+    // "from_state"/"to_state". The HTTP response passes the on-disk
+    // shape through unchanged.
     for (const t of snapshot.transitions) {
       tbody.appendChild(el("tr", {}, [
         el("td", { text: t.at || "" }),
-        el("td", { text: t.from_state || "" }),
-        el("td", { text: t.to_state || "" }),
+        el("td", { text: t.from || "" }),
+        el("td", { text: t.to || "" }),
         el("td", { text: t.reason || "" }),
       ]));
     }
