@@ -1,20 +1,27 @@
 """Tests for :mod:`backend.jobs.state`.
 
-Step 7b enables three edges and pins the rest as illegal:
+After Step 10 the live edge set is:
 
 * ``created → researching``
 * ``researching → briefing_ready``
 * ``researching → failed``
+* ``briefing_ready → user_editing``        (Step 10)
+* ``briefing_ready → approved``            (Step 10, approve-as-is)
+* ``user_editing → approved``              (Step 10)
+* ``user_editing → regenerating_section``  (Step 10)
+* ``regenerating_section → user_editing``  (Step 10)
+* ``regenerating_section → failed``        (Step 10)
 
-These tests assert both halves: the three legal pairs succeed and
-return a well-shaped :class:`TransitionRecord`; every other pair
+These tests assert both halves: every legal pair succeeds and
+returns a well-shaped :class:`TransitionRecord`; every other pair
 (including self-loops, reverse edges, and any future-stage edge
-not yet enabled) raises :class:`IllegalTransition`.
+not yet enabled — e.g. ``approved → generating_documents``) raises
+:class:`IllegalTransition`.
 
-A future PR that enables a new edge must update
-:data:`_LEGAL_EDGES` here. That's intentional — every new edge in
-``_ALLOWED_TRANSITIONS`` is a real protocol change and should be
-visible in the review surface.
+A future PR that enables a new edge must update :data:`_LEGAL_EDGES`
+here. That's intentional — every new edge in ``_ALLOWED_TRANSITIONS``
+is a real protocol change and should be visible in the review
+surface.
 """
 
 from __future__ import annotations
@@ -65,17 +72,24 @@ def test_enum_has_no_extra_off_spec_states() -> None:
 # ---------------------------------------------------------------------------
 
 _LEGAL_EDGES: frozenset[tuple[JobState, JobState]] = frozenset({
+    # Step 7b
     (JobState.CREATED, JobState.RESEARCHING),
     (JobState.RESEARCHING, JobState.BRIEFING_READY),
     (JobState.RESEARCHING, JobState.FAILED),
+    # Step 10 — approval gate
+    (JobState.BRIEFING_READY, JobState.USER_EDITING),
+    (JobState.BRIEFING_READY, JobState.APPROVED),
+    (JobState.USER_EDITING, JobState.APPROVED),
+    (JobState.USER_EDITING, JobState.REGENERATING_SECTION),
+    (JobState.REGENERATING_SECTION, JobState.USER_EDITING),
+    (JobState.REGENERATING_SECTION, JobState.FAILED),
 })
 
 
-def test_allowed_transitions_set_matches_step_7b_edges_exactly() -> None:
-    """Step 7b ships three edges and no others. A future PR that adds
-    an edge must update both ``_ALLOWED_TRANSITIONS`` and
-    :data:`_LEGAL_EDGES` in this file — which forces the change
-    through review."""
+def test_allowed_transitions_set_matches_live_edges_exactly() -> None:
+    """The live set must match :data:`_LEGAL_EDGES`. A future PR that
+    adds an edge must update both ``_ALLOWED_TRANSITIONS`` and this
+    file — which forces the change through review."""
     assert state_mod._ALLOWED_TRANSITIONS == _LEGAL_EDGES
 
 
@@ -154,14 +168,18 @@ def test_reverse_of_legal_edge_is_illegal() -> None:
         )
 
 
-def test_briefing_ready_to_user_editing_is_not_yet_enabled() -> None:
-    """Sanity-check that downstream Step 8 edges are still illegal.
-    When Step 8 enables this edge, this test should flip — and that
-    flip must appear in the diff."""
+def test_approved_to_generating_documents_is_not_yet_enabled() -> None:
+    """Sanity-check that downstream Stage 2 edges are still illegal.
+    When Stage 2 enables this edge, this test should flip — and that
+    flip must appear in the diff.
+
+    Step 10 enabled ``briefing_ready → user_editing``; the next
+    illegal edge to pin is the one immediately after the approval
+    gate."""
     with pytest.raises(IllegalTransition):
         apply_transition(
-            from_state=JobState.BRIEFING_READY,
-            to_state=JobState.USER_EDITING,
+            from_state=JobState.APPROVED,
+            to_state=JobState.GENERATING_DOCUMENTS,
         )
 
 
