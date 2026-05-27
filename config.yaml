@@ -1,0 +1,27 @@
+# ANS Prospect Tool — application configuration
+# Secrets (API keys, M365 credentials) are NOT stored here.
+# They live in macOS Keychain, entered via /admin/credentials.
+
+budgets:
+  per_job_usd: 2.00              # Default cap per job
+  per_job_max_via_ui_usd: 10.00  # Highest the UI slider can set; above this requires editing this file
+  daily_soft_usd: 10.00          # Warn in UI but allow
+  daily_hard_usd: 25.00          # Block; override only with --force CLI flag
+  monthly_hard_usd: 200.00       # Block; override requires editing this file
+
+models:
+  writer_model: claude-sonnet-4-5    # Benefits, FAQ, and objections writers
+  research_model: claude-sonnet-4-5  # Research, contact extraction, needs, briefing compiler, mapping
+  critic_model: claude-haiku-4-5     # Critic agent (review pass only — cheap by design)
+
+keychain:
+  service: ans-prospect-tool
+  accounts:
+    anthropic_api_key: anthropic-api-key
+    m365_client_id: m365-client-id
+    m365_client_secret: m365-client-secret
+    m365_tenant_id: m365-tenant-id
+    m365_refresh_token: m365-refresh-token
+
+concurrency:
+  max_concurrent_jobs: 3  # Semaphore in main.py; excess jobs queue in SQLite

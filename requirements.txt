@@ -1,0 +1,52 @@
+# ANS Prospect Tool — Python dependencies
+# Python 3.11+ required.
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.18
+
+# Anthropic SDK
+anthropic>=0.40.0
+
+# Database
+sqlalchemy>=2.0.36
+alembic>=1.14.0
+
+# Data validation
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# Authentication
+argon2-cffi>=23.1.0
+python-jose[cryptography]>=3.3.0
+
+# Secrets management (macOS Keychain)
+keyring>=25.5.0
+
+# Microsoft 365 / Graph API
+msal>=1.31.0
+httpx>=0.28.0
+
+# Document generation
+weasyprint>=62.0
+openpyxl>=3.1.5
+jinja2>=3.1.4
+
+# Logo processing
+pillow>=11.0.0
+cairosvg>=2.7.1
+pdf2image>=1.17.0
+
+# Configuration
+pyyaml>=6.0.2
+python-dateutil>=2.9.0
+
+# CLI
+click>=8.1.8
+
+# Testing
+pytest>=8.3.0
+pytest-asyncio>=0.25.0
+pytest-httpx>=0.35.0
+respx>=0.21.0
