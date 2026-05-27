@@ -71,6 +71,8 @@ from backend.agents.briefing_compiler import BriefingCompiler
 from backend.agents.briefing_models import Briefing
 from backend.agents.contact_extractor import ContactExtractor
 from backend.agents.contact_models import ContactExtractionResult
+from backend.agents.critic import Stage2CriticAgent
+from backend.agents.critic_models import Stage2CriticReport
 from backend.agents.faq_models import FAQDocument
 from backend.agents.faq_writer import FAQWriter
 from backend.agents.mapping import ProductMappingAgent
@@ -90,12 +92,16 @@ from backend.jobs.state import JobState, apply_transition
 from backend.jobs.storage import (
     JobNotFound,
     append_transition,
+    read_benefits,
     read_briefing,
+    read_faq,
+    read_objections,
     read_product_mapping,
     record_failure,
     write_benefits,
     write_briefing,
     write_contacts,
+    write_critic_report,
     write_dossier,
     write_faq,
     write_needs_assessment,
@@ -430,6 +436,47 @@ class Orchestrator:
                 persist=write_objections,
             )
             return benefits, faq, objections
+
+    async def run_critic(
+        self,
+        *,
+        job_id: str,
+        knowledge_bundle: str,
+        user_context: str | None = None,
+    ) -> Stage2CriticReport:
+        """Drive the Stage 2 :class:`Stage2CriticAgent` in place at APPROVED.
+
+        Reads five upstream artefacts (briefing, product mapping, and
+        the three writer artefacts), serialises each with
+        ``model_dump_json``, runs the critic on a worker thread, and on
+        success writes ``critic_report.json``. The job stays at
+        :attr:`JobState.APPROVED` throughout — Step 20 keeps the
+        verdict **advisory**: the orchestrator persists the report but
+        does not branch on the verdict and does not append a
+        transition. A future step (revision-loop wiring) will read the
+        report and decide whether to re-run the writers; that
+        decision-making belongs at the orchestration layer, not the
+        agent.
+
+        Pre-flight failures (wrong state, any missing upstream
+        artefact, schema-invalid artefact) surface their underlying
+        exceptions (:class:`JobNotInExpectedState`,
+        :class:`JobNotFound`, :class:`pydantic.ValidationError`)
+        without stamping ``last_error`` — those are caller mistakes,
+        not critic-agent failures (same semantics as
+        :meth:`run_mapping` / :meth:`run_benefits`).
+
+        On any agent failure the orchestrator stamps
+        ``state.json.last_error`` with the matching category,
+        optionally bumps ``Job.trap_triggers`` (for trap fires), and
+        re-raises the original exception unchanged.
+        """
+        async with get_job_semaphore():
+            return await self._do_run_critic(
+                job_id=job_id,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+            )
 
     # ------------------------------------------------------------------
     # Internals
@@ -907,6 +954,106 @@ class Orchestrator:
         persist(job_id, result)
         return result
 
+    async def _do_run_critic(
+        self,
+        *,
+        job_id: str,
+        knowledge_bundle: str,
+        user_context: str | None,
+    ) -> Stage2CriticReport:
+        """Slot-holding inner body for the Stage 2 critic.
+
+        In-place: the job stays at ``APPROVED`` throughout. The five
+        upstream artefacts (briefing, product mapping, benefits, FAQ,
+        objections) are loaded from disk and serialised verbatim into
+        the prompt — the critic reasons over the exact bytes that
+        landed on disk, so a hand-edit between the writers and the
+        critic is visible to the critic. No transition is appended on
+        success or failure — Step 20 keeps the verdict advisory; a
+        later step that owns revision-loop wiring will decide whether
+        a NEEDS_REVISION verdict triggers a re-run.
+        """
+        state_file = self._load_state(job_id)
+        current = _state_file_state(state_file)
+        if current is not JobState.APPROVED:
+            raise JobNotInExpectedState(
+                job_id=job_id,
+                actual=current,
+                expected=JobState.APPROVED,
+            )
+
+        # Read the five upstream artefacts from disk. Missing/corrupt
+        # files are caller mistakes — let the underlying JobNotFound /
+        # ValidationError propagate without stamping last_error.
+        briefing = read_briefing(job_id)
+        product_mapping = read_product_mapping(job_id)
+        benefits = read_benefits(job_id)
+        faq = read_faq(job_id)
+        objections = read_objections(job_id)
+
+        briefing_json = briefing.model_dump_json()
+        product_mapping_json = product_mapping.model_dump_json()
+        benefits_json = benefits.model_dump_json()
+        faq_json = faq.model_dump_json()
+        objections_json = objections.model_dump_json()
+
+        agent = Stage2CriticAgent(client=self._client, models=self._models)
+
+        try:
+            report = await asyncio.to_thread(
+                agent.run,
+                job_id=job_id,
+                company_name=briefing.company_name,
+                company_url=str(briefing.company_url),
+                briefing_json=briefing_json,
+                product_mapping_json=product_mapping_json,
+                benefits_json=benefits_json,
+                faq_json=faq_json,
+                objections_json=objections_json,
+                knowledge_bundle=knowledge_bundle,
+                user_context=user_context,
+            )
+        except RunawayTrapFired as exc:
+            self._record_critic_failure(
+                job_id=job_id,
+                category=_FAIL_TRAP,
+                exc=exc,
+                trap_name=exc.__class__.__name__,
+            )
+            raise
+        except AgentOutputInvalid as exc:
+            self._record_critic_failure(
+                job_id=job_id,
+                category=_FAIL_OUTPUT_INVALID,
+                exc=exc,
+                trap_name=None,
+            )
+            raise
+        except Exception as exc:
+            self._record_critic_failure(
+                job_id=job_id,
+                category=_FAIL_CRASHED,
+                exc=exc,
+                trap_name=None,
+            )
+            raise
+
+        if not isinstance(report, Stage2CriticReport):
+            type_exc = TypeError(
+                f"Stage2CriticAgent returned {type(report).__name__}, "
+                "expected Stage2CriticReport"
+            )
+            self._record_critic_failure(
+                job_id=job_id,
+                category=_FAIL_CRASHED,
+                exc=type_exc,
+                trap_name=None,
+            )
+            raise type_exc
+
+        write_critic_report(job_id, report)
+        return report
+
     # ------------------------------------------------------------------
     # State / DB helpers
     # ------------------------------------------------------------------
@@ -1124,6 +1271,58 @@ class Orchestrator:
                     "category": category,
                     "writer": writer_label,
                 },
+            )
+
+    def _record_critic_failure(
+        self,
+        *,
+        job_id: str,
+        category: str,
+        exc: BaseException,
+        trap_name: str | None,
+    ) -> None:
+        """Stamp ``last_error`` for a Stage-2 critic failure without
+        changing ``current_state``.
+
+        Same in-place semantics as :meth:`_record_mapping_failure` and
+        :meth:`_record_writer_failure`: the job stays at
+        :attr:`JobState.APPROVED` across critic failures so the
+        operator can retry without re-running the writers. Only
+        ``last_error`` (and ``Job.trap_triggers`` on trap fires) move.
+
+        Best-effort: if a write fails here, log loudly and let the
+        original exception propagate. Losing failure metadata is
+        survivable; losing the signal that the run failed is not.
+        """
+        if isinstance(exc, RunawayTrapFired):
+            details = exc.reason
+        else:
+            details = str(exc) or exc.__class__.__name__
+
+        try:
+            record_failure(job_id, category=category, details=details)
+        except Exception:
+            log.exception(
+                "failed to record last_error on state.json (critic)",
+                extra={"job_id": job_id, "category": category},
+            )
+
+        if trap_name is None:
+            return
+
+        try:
+            with self._session_factory() as db:
+                job = db.execute(
+                    select(Job).where(Job.id == job_id)
+                ).scalar_one()
+                job.trap_triggers = _append_trap_trigger(
+                    job.trap_triggers, trap_name
+                )
+                db.commit()
+        except Exception:
+            log.exception(
+                "failed to bump Job.trap_triggers (critic)",
+                extra={"job_id": job_id, "category": category},
             )
 
 

@@ -45,6 +45,7 @@ from typing import Any, ClassVar
 from backend.agents.benefits_models import BenefitsBrief
 from backend.agents.briefing_models import Briefing
 from backend.agents.contact_models import ContactExtractionResult
+from backend.agents.critic_models import Stage2CriticReport
 from backend.agents.faq_models import FAQDocument
 from backend.agents.mapping_models import ProductMapping
 from backend.agents.needs_models import NeedsAssessment
@@ -672,6 +673,56 @@ def read_objections(job_id: str) -> ObjectionsRegister:
         raise JobNotFound(f"objections.json not found for job {job_id}")
     raw = json.loads(path.read_text(encoding="utf-8"))
     return ObjectionsRegister.model_validate(raw)
+
+
+# ---------------------------------------------------------------------------
+# critic_report.json — Stage 2 critic verdict
+# ---------------------------------------------------------------------------
+#
+# Step 20 adds the Stage 2 critic artefact. Same per-pair storage idiom
+# as the writer artefacts above: ``model_dump(mode="json")`` on the way
+# out so Pydantic handles enum/HttpUrl/date → string; full
+# ``model_validate`` on the way in so a corrupt or hand-edited report
+# surfaces as :class:`pydantic.ValidationError` at read time. The
+# verdict/severity cross-field validator on :class:`Stage2CriticReport`
+# re-runs on reload, so a tampered report that pairs (e.g.) a BLOCKING
+# issue with ``verdict = READY`` fails here instead of misleading a
+# downstream consumer about whether the artefacts are shippable.
+
+def _critic_report_path(job_id: str) -> Path:
+    return job_folder(job_id) / "critic_report.json"
+
+
+def write_critic_report(job_id: str, report: Stage2CriticReport) -> Path:
+    """Atomically write the Pydantic critic report to disk.
+
+    Returns the path written. Step 20 keeps the critic's verdict
+    advisory: the orchestrator persists this artefact in place at
+    :attr:`JobState.APPROVED` and does not branch on the verdict.
+    """
+    create_job_folder(job_id)
+    payload = report.model_dump(mode="json")
+    target = _critic_report_path(job_id)
+    _atomic_write_json(target, payload)
+    return target
+
+
+def read_critic_report(job_id: str) -> Stage2CriticReport:
+    """Read and Pydantic-validate ``critic_report.json``.
+
+    Same exception contract as :func:`read_briefing`. The
+    :class:`Stage2CriticReport` verdict/severity cross-field validator
+    runs on :meth:`model_validate`, so a hand-edited report that
+    contradicts itself (e.g. ``verdict = READY`` alongside a
+    ``BLOCKING`` issue) fails here on reload.
+    """
+    path = _critic_report_path(job_id)
+    if not path.exists():
+        raise JobNotFound(
+            f"critic_report.json not found for job {job_id}"
+        )
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return Stage2CriticReport.model_validate(raw)
 
 
 # ---------------------------------------------------------------------------
