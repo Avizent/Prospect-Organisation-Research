@@ -1,11 +1,15 @@
-"""Pipeline orchestrator — Step 7b.
+"""Pipeline orchestrator — Steps 7b + 9b.
 
 Step 7b ships a *minimal* orchestrator: one public coroutine,
 :meth:`Orchestrator.run_research`, that drives a single
 ``created → researching → briefing_ready | failed`` slice of the
-canonical job lifecycle. Briefing, mapping, writers, critic, and
-delivery are out of scope until later steps; this module is purely
-ResearchAgent execution + state persistence + failure recording.
+canonical job lifecycle. Step 9b adds the full Stage 1 chain,
+:meth:`Orchestrator.run_stage1`, which runs ResearchAgent →
+ContactExtractor → NeedsAgent → BriefingCompiler in sequence,
+persists all four artefacts, and uses the same terminal-state
+contract as ``run_research`` (``briefing_ready`` on success,
+``failed`` on any agent's failure). Mapping, writers, critic, and
+delivery remain out of scope.
 
 The contract in one paragraph
 -----------------------------
@@ -61,6 +65,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.agents._protocols import CloudClientProtocol
+from backend.agents.briefing_compiler import BriefingCompiler
+from backend.agents.briefing_models import Briefing
+from backend.agents.contact_extractor import ContactExtractor
+from backend.agents.contact_models import ContactExtractionResult
+from backend.agents.needs import NeedsAgent
+from backend.agents.needs_models import NeedsAssessment
 from backend.agents.output import AgentOutputInvalid
 from backend.agents.research import ResearchAgent
 from backend.agents.research_models import ResearchDossier
@@ -73,7 +83,10 @@ from backend.jobs.storage import (
     JobNotFound,
     append_transition,
     record_failure,
+    write_briefing,
+    write_contacts,
     write_dossier,
+    write_needs_assessment,
 )
 
 
@@ -191,6 +204,35 @@ class Orchestrator:
                 job_id=job_id, user_context=user_context
             )
 
+    async def run_stage1(
+        self,
+        *,
+        job_id: str,
+        user_context: str | None = None,
+    ) -> Briefing:
+        """Drive the full Stage 1 chain end-to-end (Step 9b).
+
+        Runs the four Stage-1 agents in sequence — ResearchAgent,
+        ContactExtractor, NeedsAgent, BriefingCompiler — persisting
+        each artefact to ``jobs/{job_id}/`` immediately on success
+        before invoking the next agent. The terminal-state contract
+        is the same as :meth:`run_research`:
+
+        * success → ``briefing_ready``
+        * any agent's :class:`RunawayTrapFired`,
+          :class:`AgentOutputInvalid`, or unexpected ``Exception`` →
+          ``failed`` (and the exception re-raises unchanged).
+
+        Partial artefacts are deliberately left on disk when a
+        downstream agent fails; ``state.json.last_error`` plus the
+        on-disk file listing identify how far the run reached. The
+        semaphore is held for the full chain.
+        """
+        async with get_job_semaphore():
+            return await self._do_run_stage1(
+                job_id=job_id, user_context=user_context
+            )
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -238,7 +280,7 @@ class Orchestrator:
                 user_context=user_context,
             )
         except RunawayTrapFired as exc:
-            self._record_research_failure(
+            self._record_stage1_failure(
                 job_id=job_id,
                 category=_FAIL_TRAP,
                 exc=exc,
@@ -246,7 +288,7 @@ class Orchestrator:
             )
             raise
         except AgentOutputInvalid as exc:
-            self._record_research_failure(
+            self._record_stage1_failure(
                 job_id=job_id,
                 category=_FAIL_OUTPUT_INVALID,
                 exc=exc,
@@ -254,7 +296,7 @@ class Orchestrator:
             )
             raise
         except Exception as exc:
-            self._record_research_failure(
+            self._record_stage1_failure(
                 job_id=job_id,
                 category=_FAIL_CRASHED,
                 exc=exc,
@@ -272,7 +314,7 @@ class Orchestrator:
                 f"ResearchAgent returned {type(dossier).__name__}, "
                 "expected ResearchDossier"
             )
-            self._record_research_failure(
+            self._record_stage1_failure(
                 job_id=job_id,
                 category=_FAIL_CRASHED,
                 exc=exc,
@@ -289,6 +331,192 @@ class Orchestrator:
         append_transition(job_id, record_researching_to_ready)
         self._update_job_status(job_id, JobState.BRIEFING_READY)
         return dossier
+
+    async def _do_run_stage1(
+        self,
+        *,
+        job_id: str,
+        user_context: str | None,
+    ) -> Briefing:
+        """Slot-holding inner body for the full Stage 1 chain.
+
+        Mirrors :meth:`_do_run_research` for the pre-flight check and
+        ``created → researching`` transition, then runs the four
+        Stage-1 agents in sequence. Each agent runs on
+        :func:`asyncio.to_thread` so the event loop stays free
+        between blocking SDK calls. Artefacts are passed between
+        agents in memory (``model_dump_json``) — no reload from disk
+        — but each artefact is persisted to ``jobs/{job_id}/`` the
+        instant the producing agent returns successfully, so a
+        downstream failure leaves the upstream artefacts in place.
+        """
+        state_file = self._load_state(job_id)
+        if state_file_state := _state_file_state(state_file):
+            if state_file_state is not JobState.CREATED:
+                raise JobNotInExpectedState(
+                    job_id=job_id, actual=state_file_state
+                )
+
+        company_name, company_url = self._read_intake_fields(state_file)
+
+        # Transition 1: created → researching. Same rationale as
+        # _do_run_research — apply the in-flight state the moment we
+        # take the semaphore slot, before the first agent call.
+        record_created_to_researching = apply_transition(
+            from_state=JobState.CREATED,
+            to_state=JobState.RESEARCHING,
+            reason="orchestrator pickup",
+        )
+        append_transition(job_id, record_created_to_researching)
+        self._update_job_status(job_id, JobState.RESEARCHING)
+
+        # ----- Agent 1: ResearchAgent -----
+        research_agent = ResearchAgent(
+            client=self._client, models=self._models
+        )
+        dossier = await self._run_stage1_agent(
+            job_id=job_id,
+            agent=research_agent,
+            expected_type=ResearchDossier,
+            kwargs={
+                "company_name": company_name,
+                "company_url": company_url,
+                "user_context": user_context,
+            },
+        )
+        write_dossier(job_id, dossier)
+        dossier_json = dossier.model_dump_json()
+
+        # ----- Agent 2: ContactExtractor -----
+        contact_agent = ContactExtractor(
+            client=self._client, models=self._models
+        )
+        contacts = await self._run_stage1_agent(
+            job_id=job_id,
+            agent=contact_agent,
+            expected_type=ContactExtractionResult,
+            kwargs={
+                "company_name": company_name,
+                "company_url": company_url,
+                "dossier_json": dossier_json,
+                "user_context": user_context,
+            },
+        )
+        write_contacts(job_id, contacts)
+        contacts_json = contacts.model_dump_json()
+
+        # ----- Agent 3: NeedsAgent -----
+        # Deliberately does NOT receive contacts_json — see the
+        # design note in backend/agents/needs.py: conflating contacts
+        # with maturity invites anchoring on individuals.
+        needs_agent = NeedsAgent(
+            client=self._client, models=self._models
+        )
+        needs = await self._run_stage1_agent(
+            job_id=job_id,
+            agent=needs_agent,
+            expected_type=NeedsAssessment,
+            kwargs={
+                "company_name": company_name,
+                "company_url": company_url,
+                "dossier_json": dossier_json,
+                "user_context": user_context,
+            },
+        )
+        write_needs_assessment(job_id, needs)
+        needs_json = needs.model_dump_json()
+
+        # ----- Agent 4: BriefingCompiler -----
+        briefing_agent = BriefingCompiler(
+            client=self._client, models=self._models
+        )
+        briefing = await self._run_stage1_agent(
+            job_id=job_id,
+            agent=briefing_agent,
+            expected_type=Briefing,
+            kwargs={
+                "company_name": company_name,
+                "company_url": company_url,
+                "dossier_json": dossier_json,
+                "contacts_json": contacts_json,
+                "needs_json": needs_json,
+                "user_context": user_context,
+            },
+        )
+        write_briefing(job_id, briefing)
+
+        record_researching_to_ready = apply_transition(
+            from_state=JobState.RESEARCHING,
+            to_state=JobState.BRIEFING_READY,
+            reason="stage 1 briefing persisted",
+        )
+        append_transition(job_id, record_researching_to_ready)
+        self._update_job_status(job_id, JobState.BRIEFING_READY)
+        return briefing
+
+    async def _run_stage1_agent(
+        self,
+        *,
+        job_id: str,
+        agent: Any,
+        expected_type: type,
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """Run one Stage 1 agent on a worker thread, with the single
+        canonical failure-categorisation block.
+
+        Every Stage-1 agent goes through this helper so the four
+        catch sites stay in lock-step: a trap fires ``runaway_trap``
+        (and bumps ``trap_triggers``), an ``AgentOutputInvalid``
+        fires ``output_invalid``, anything else fires ``crashed``.
+        The defence-in-depth wrong-type check matches the one in
+        :meth:`_do_run_research`.
+
+        Raises whatever the agent raised, unchanged.
+        """
+        try:
+            result = await asyncio.to_thread(
+                agent.run, job_id=job_id, **kwargs
+            )
+        except RunawayTrapFired as exc:
+            self._record_stage1_failure(
+                job_id=job_id,
+                category=_FAIL_TRAP,
+                exc=exc,
+                trap_name=exc.__class__.__name__,
+            )
+            raise
+        except AgentOutputInvalid as exc:
+            self._record_stage1_failure(
+                job_id=job_id,
+                category=_FAIL_OUTPUT_INVALID,
+                exc=exc,
+                trap_name=None,
+            )
+            raise
+        except Exception as exc:
+            self._record_stage1_failure(
+                job_id=job_id,
+                category=_FAIL_CRASHED,
+                exc=exc,
+                trap_name=None,
+            )
+            raise
+
+        if not isinstance(result, expected_type):
+            type_exc = TypeError(
+                f"agent {agent.name!r} returned "
+                f"{type(result).__name__}, expected "
+                f"{expected_type.__name__}"
+            )
+            self._record_stage1_failure(
+                job_id=job_id,
+                category=_FAIL_CRASHED,
+                exc=type_exc,
+                trap_name=None,
+            )
+            raise type_exc
+        return result
 
     # ------------------------------------------------------------------
     # State / DB helpers
@@ -324,7 +552,7 @@ class Orchestrator:
             job.status = new_state.value
             db.commit()
 
-    def _record_research_failure(
+    def _record_stage1_failure(
         self,
         *,
         job_id: str,
@@ -334,6 +562,11 @@ class Orchestrator:
     ) -> None:
         """Apply researching→failed, write last_error, optionally bump
         trap_triggers.
+
+        Used by both :meth:`_do_run_research` (Step 7b, single agent)
+        and :meth:`_do_run_stage1` (Step 9b, four-agent chain). Both
+        callers transition from ``RESEARCHING`` to ``FAILED`` on any
+        agent failure, so the helper hard-codes that single edge.
 
         Best-effort: if a write fails here, log loudly but let the
         original exception propagate. Losing failure metadata is
