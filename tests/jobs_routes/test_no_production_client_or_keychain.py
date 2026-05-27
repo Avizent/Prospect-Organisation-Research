@@ -122,7 +122,11 @@ def test_routes_module_is_importable_in_isolation() -> None:
     module = importlib.import_module("backend.jobs.routes")
     assert hasattr(module, "router")
     # Spot-check that the route count matches the approved surface.
-    assert len(module.router.routes) == 12
+    # Step 21 bumped this from 12 → 17 by adding 5 read-only Stage 2
+    # artefact GET routes (product-mapping, benefits, faq, objections,
+    # critic-report). Any future change to this number is a deliberate
+    # surface change that must be approved per-step.
+    assert len(module.router.routes) == 17
 
 
 def test_no_cloud_client_attribute_access(routes_source: str) -> None:

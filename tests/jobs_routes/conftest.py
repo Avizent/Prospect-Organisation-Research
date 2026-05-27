@@ -35,6 +35,12 @@ from keyring.backend import KeyringBackend
 from keyring.errors import PasswordDeleteError
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.agents.benefits_models import (
+    Audience,
+    BenefitClaim,
+    BenefitsBrief,
+    BenefitsSection,
+)
 from backend.agents.briefing_models import (
     Briefing,
     BriefingClaim,
@@ -54,10 +60,37 @@ from backend.agents.contact_models import (
     Function,
     Seniority,
 )
+from backend.agents.critic_models import (
+    CitedArtefact,
+    CriticIssue,
+    IssueCategory,
+    Severity,
+    Stage2CriticReport,
+    Verdict,
+)
+from backend.agents.faq_models import (
+    FAQCategory,
+    FAQDocument,
+    FAQEntry,
+)
+from backend.agents.mapping_models import (
+    KnowledgeExcerptRef,
+    KnowledgeSource,
+    NeedProductMatch,
+    ProductLine,
+    ProductMapping,
+    ProductReference,
+    UnmatchedNeed,
+)
 from backend.agents.needs_models import (
     IdentifiedNeed,
     LabMaturity,
     NeedsAssessment,
+)
+from backend.agents.objections_models import (
+    ObjectionCategory,
+    ObjectionRow,
+    ObjectionsRegister,
 )
 from backend.agents.research_models import (
     Confidence,
@@ -69,10 +102,15 @@ from backend.db.session import get_db
 from backend.jobs.state import JobState, apply_transition
 from backend.jobs.storage import (
     append_transition,
+    write_benefits,
     write_briefing,
     write_contacts,
+    write_critic_report,
     write_dossier,
+    write_faq,
     write_needs_assessment,
+    write_objections,
+    write_product_mapping,
 )
 from backend.main import app
 
@@ -372,6 +410,211 @@ def sample_needs() -> NeedsAssessment:
 
 
 # ---------------------------------------------------------------------------
+# Sample Stage 2 artefacts — minimal valid fixtures for the five readers
+# ---------------------------------------------------------------------------
+#
+# These mirror the sample-model builders in
+# ``tests/jobs/test_storage_product_mapping.py``,
+# ``tests/jobs/test_storage_writers.py``, and
+# ``tests/jobs/test_storage_critic.py``. Kept minimal and re-used as
+# fixtures so individual route tests can seed exactly the files they
+# need (e.g. an "objections present, everything else absent" job for
+# per-artefact AvailableArtefacts assertions).
+
+@pytest.fixture()
+def sample_product_mapping() -> ProductMapping:
+    return ProductMapping(
+        company_name=_COMPANY_NAME,
+        company_url=_COMPANY_URL,  # type: ignore[arg-type]
+        mapped_at=date(2026, 5, 27),
+        matches=[
+            NeedProductMatch(
+                need_priority=1,
+                need_summary="De-risk SD-WAN rollout",
+                products=[
+                    ProductReference(
+                        product_line=ProductLine.EMULATORS,
+                        product_name="Netropy 100G",
+                        knowledge_excerpt_refs=[0],
+                    )
+                ],
+                use_case_framing=(
+                    "Lab-emulate the planned SD-WAN topology before "
+                    "cutover."
+                ),
+                why_this_fits=(
+                    "Briefing flags an active SD-WAN programme; "
+                    "Netropy covers the bandwidth and impairment range."
+                ),
+                confidence=Confidence.HIGH,
+            )
+        ],
+        unmatched_needs=[
+            UnmatchedNeed(
+                need_priority=2,
+                need_summary="Refresh SIEM tooling",
+                reason="Outside ANS lab/network testing portfolio.",
+            )
+        ],
+        knowledge_excerpts=[
+            KnowledgeExcerptRef(
+                source_file=KnowledgeSource.PRODUCTS_EMULATORS,
+                heading="Netropy Network Emulators",
+                rationale="Bandwidth and impairment range for SD-WAN.",
+            ),
+        ],
+        gaps=[],
+    )
+
+
+def _benefit_claim() -> BenefitClaim:
+    return BenefitClaim(
+        claim="Netropy emulates realistic SD-WAN topologies.",
+        detail=(
+            "Line-rate impairment up to 100G covers the rollout's "
+            "aggregate bandwidth without truncation."
+        ),
+        why_it_matters=(
+            "Surfaces SLA-breaching jitter before cutover instead "
+            "of in production."
+        ),
+        knowledge_excerpt_refs=[0],
+        briefing_source_refs=[0],
+        confidence=Confidence.HIGH,
+    )
+
+
+@pytest.fixture()
+def sample_benefits() -> BenefitsBrief:
+    return BenefitsBrief(
+        company_name=_COMPANY_NAME,
+        company_url=_COMPANY_URL,  # type: ignore[arg-type]
+        written_at=date(2026, 5, 27),
+        executive_summary=BenefitsSection(
+            heading="Executive summary",
+            audience=Audience.CTO_CIO,
+            summary="ANS lab-validates the SD-WAN rollout end-to-end.",
+            body=[_benefit_claim()],
+        ),
+        technical_fit=BenefitsSection(
+            heading="Technical fit",
+            audience=Audience.ENGINEERS,
+            summary="Netropy lines up with the planned topology.",
+            body=[_benefit_claim()],
+        ),
+        business_case=BenefitsSection(
+            heading="Business case",
+            audience=Audience.IT_DIRECTOR,
+            summary="Catches cutover risk before it hits revenue.",
+            body=[_benefit_claim()],
+        ),
+        gaps=[],
+    )
+
+
+@pytest.fixture()
+def sample_faq() -> FAQDocument:
+    """Populated FAQ — 12 entries (the schema floor)."""
+    categories = [
+        FAQCategory.ABOUT_ANS,
+        FAQCategory.PRODUCTS,
+        FAQCategory.IMPLEMENTATION,
+        FAQCategory.COMMERCIAL,
+        FAQCategory.SUPPORT,
+    ]
+    entries = [
+        FAQEntry(
+            question=f"Question #{i}?",
+            answer=(
+                "ANS-side answer grounded in the briefing and the "
+                "knowledge bundle."
+            ),
+            category=categories[i % len(categories)],
+            knowledge_excerpt_refs=[0],
+            briefing_source_refs=[0],
+            confidence=Confidence.HIGH,
+        )
+        for i in range(12)
+    ]
+    return FAQDocument(
+        company_name=_COMPANY_NAME,
+        company_url=_COMPANY_URL,  # type: ignore[arg-type]
+        written_at=date(2026, 5, 27),
+        entries=entries,
+        gaps=[],
+    )
+
+
+@pytest.fixture()
+def sample_objections() -> ObjectionsRegister:
+    """Populated register — 15 rows (the schema floor)."""
+    rows = [
+        ObjectionRow(
+            category=ObjectionCategory.PRICE,
+            objection=f"Stated objection #{i}.",
+            underlying_concern=(
+                "Worried that procurement won't approve the spend."
+            ),
+            response=(
+                "ANS Netropy emulators are line-rate and "
+                "impairment-accurate."
+            ),
+            knowledge_excerpt_refs=[0],
+            briefing_source_refs=[0],
+            escalation_path="Account owner brings in solutions architect.",
+            confidence=Confidence.HIGH,
+        )
+        for i in range(15)
+    ]
+    return ObjectionsRegister(
+        company_name=_COMPANY_NAME,
+        company_url=_COMPANY_URL,  # type: ignore[arg-type]
+        written_at=date(2026, 5, 27),
+        rows=rows,
+        gaps=[],
+    )
+
+
+@pytest.fixture()
+def sample_critic_report() -> Stage2CriticReport:
+    """One WARNING issue → READY_WITH_WARNINGS verdict.
+
+    The verdict/severity cross-field validator on
+    :class:`Stage2CriticReport` accepts this pairing; a tampered
+    report that pairs (e.g.) ``verdict = READY`` with a ``BLOCKING``
+    issue would be rejected at read time — see
+    :mod:`tests.jobs_routes.test_stage2_artefact_reads`.
+    """
+    return Stage2CriticReport(
+        company_name=_COMPANY_NAME,
+        company_url=_COMPANY_URL,  # type: ignore[arg-type]
+        reviewed_at=date(2026, 5, 27),
+        verdict=Verdict.READY_WITH_WARNINGS,
+        issues=[
+            CriticIssue(
+                artefact=CitedArtefact.FAQ,
+                locator="entries[3].answer",
+                severity=Severity.WARNING,
+                category=IssueCategory.OFF_BRAND_TONE,
+                description=(
+                    "Answer veers into marketing-speak; tighten to a "
+                    "senior pre-sales register."
+                ),
+                suggested_fix=(
+                    "Replace 'world-class' with a concrete capability "
+                    "claim grounded in the datasheet."
+                ),
+            ),
+        ],
+        summary=(
+            "Artefacts hang together; one tone slip in the FAQ that "
+            "an operator should clean up before sending."
+        ),
+        gaps=[],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Job-state factory — go through real intake, then walk legal edges
 # ---------------------------------------------------------------------------
 
@@ -508,6 +751,42 @@ def job_with_all_artefacts(
     write_contacts(job_id, sample_contacts)
     write_needs_assessment(job_id, sample_needs)
     write_briefing(job_id, sample_briefing)
+    return job_id
+
+
+@pytest.fixture()
+def job_with_all_stage2_artefacts(
+    db_session: Session,
+    sample_briefing: Briefing,
+    sample_dossier: ResearchDossier,
+    sample_contacts: ContactExtractionResult,
+    sample_needs: NeedsAssessment,
+    sample_product_mapping: ProductMapping,
+    sample_benefits: BenefitsBrief,
+    sample_faq: FAQDocument,
+    sample_objections: ObjectionsRegister,
+    sample_critic_report: Stage2CriticReport,
+) -> str:
+    """An approved job with every Stage 1 and Stage 2 artefact on disk.
+
+    Step 21 reads Stage 2 artefacts produced *after* approval, so we
+    walk the job to :attr:`JobState.APPROVED` and seed all nine
+    files — four Stage 1 plus product_mapping, benefits, faq,
+    objections, and critic_report. Used by the route happy-path tests
+    and the read-only fence (which snapshots upstream artefact bytes
+    before/after hitting each GET to prove nothing is rewritten).
+    """
+    job_id = _create_job(db_session)
+    _advance(db_session, job_id, to=JobState.APPROVED)
+    write_dossier(job_id, sample_dossier)
+    write_contacts(job_id, sample_contacts)
+    write_needs_assessment(job_id, sample_needs)
+    write_briefing(job_id, sample_briefing)
+    write_product_mapping(job_id, sample_product_mapping)
+    write_benefits(job_id, sample_benefits)
+    write_faq(job_id, sample_faq)
+    write_objections(job_id, sample_objections)
+    write_critic_report(job_id, sample_critic_report)
     return job_id
 
 

@@ -76,6 +76,35 @@ _ROUTES: list[tuple[str, str, dict | None]] = [
         "/approval/regenerate/fail",
         {"category": "crashed", "details": "x"},
     ),
+    (
+        "GET",
+        "/api/jobs/00000000-0000-4000-8000-000000000000"
+        "/artefacts/product-mapping",
+        None,
+    ),
+    (
+        "GET",
+        "/api/jobs/00000000-0000-4000-8000-000000000000"
+        "/artefacts/benefits",
+        None,
+    ),
+    (
+        "GET",
+        "/api/jobs/00000000-0000-4000-8000-000000000000/artefacts/faq",
+        None,
+    ),
+    (
+        "GET",
+        "/api/jobs/00000000-0000-4000-8000-000000000000"
+        "/artefacts/objections",
+        None,
+    ),
+    (
+        "GET",
+        "/api/jobs/00000000-0000-4000-8000-000000000000"
+        "/artefacts/critic-report",
+        None,
+    ),
 ]
 
 

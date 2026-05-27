@@ -125,6 +125,11 @@ def test_get_artefact_flags_track_existence(
         "contacts": False,
         "needs_assessment": False,
         "briefing": False,
+        "product_mapping": False,
+        "benefits": False,
+        "faq": False,
+        "objections": False,
+        "critic_report": False,
     }
 
 

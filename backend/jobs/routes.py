@@ -24,6 +24,11 @@ GET    /api/jobs/{job_id}/artefacts/research-dossier      read_dossier
 GET    /api/jobs/{job_id}/artefacts/contacts              read_contacts
 GET    /api/jobs/{job_id}/artefacts/needs-assessment      read_needs_assessment
 GET    /api/jobs/{job_id}/briefing                        read_briefing
+GET    /api/jobs/{job_id}/artefacts/product-mapping       read_product_mapping
+GET    /api/jobs/{job_id}/artefacts/benefits              read_benefits
+GET    /api/jobs/{job_id}/artefacts/faq                   read_faq
+GET    /api/jobs/{job_id}/artefacts/objections            read_objections
+GET    /api/jobs/{job_id}/artefacts/critic-report         read_critic_report
 POST   /api/jobs/{job_id}/approval/open                   open_for_editing
 PATCH  /api/jobs/{job_id}/briefing                        apply_briefing_edit
 POST   /api/jobs/{job_id}/approval/approve                approve
@@ -93,10 +98,15 @@ from backend.jobs.state import IllegalTransition
 from backend.jobs.storage import (
     JobNotFound,
     job_folder,
+    read_benefits,
     read_briefing,
     read_contacts,
+    read_critic_report,
     read_dossier,
+    read_faq,
     read_needs_assessment,
+    read_objections,
+    read_product_mapping,
     read_state,
 )
 
@@ -131,7 +141,18 @@ class CreateJobResponse(BaseModel):
 
 
 class AvailableArtefacts(BaseModel):
-    """Which artefacts exist on disk for the job."""
+    """Which artefacts exist on disk for the job.
+
+    Stage 1 artefacts: ``research_dossier``, ``contacts``,
+    ``needs_assessment``, ``briefing``.
+
+    Stage 2 artefacts: ``product_mapping``, ``benefits``, ``faq``,
+    ``objections``, ``critic_report``. The frontend inspector
+    (``frontend/js/screens/job_status.js``) iterates this dict and
+    builds ``/api/jobs/{id}/artefacts/<key-with-hyphens>`` URLs from
+    each ``True`` key, so adding a new field here automatically
+    surfaces an "open JSON" link once the matching route exists.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -139,6 +160,11 @@ class AvailableArtefacts(BaseModel):
     contacts: bool
     needs_assessment: bool
     briefing: bool
+    product_mapping: bool
+    benefits: bool
+    faq: bool
+    objections: bool
+    critic_report: bool
 
 
 class JobStatusResponse(BaseModel):
@@ -314,6 +340,11 @@ def get_job_status(
         contacts=(folder / "contacts.json").exists(),
         needs_assessment=(folder / "needs_assessment.json").exists(),
         briefing=(folder / "briefing.json").exists(),
+        product_mapping=(folder / "product_mapping.json").exists(),
+        benefits=(folder / "benefits.json").exists(),
+        faq=(folder / "faq.json").exists(),
+        objections=(folder / "objections.json").exists(),
+        critic_report=(folder / "critic_report.json").exists(),
     )
     return JobStatusResponse(
         job_id=snapshot.job_id,
@@ -418,7 +449,94 @@ def get_briefing(
 
 
 # ---------------------------------------------------------------------------
-# 7. POST /api/jobs/{job_id}/approval/open
+# 7. Stage 2 artefact reads (read-only inspection)
+# ---------------------------------------------------------------------------
+#
+# Five GET routes, each a thin wrapper around :func:`_serve_artefact`.
+# These exist purely so operators (and the frontend inspector) can
+# view Stage 2 outputs written by the orchestrator. **No** orchestration,
+# no agent invocation, no document generation, no Claude calls — the
+# routes only read files that the Stage 2 pipeline has already produced.
+#
+# URL convention: kebab-case in the URL ↔ snake_case in the filename.
+# ``artefacts/critic-report`` deliberately matches ``critic_report.json``
+# (rather than the shorter ``critic``) so future companion artefacts
+# (e.g. ``critic_followup.json``) can take the obvious URL without a
+# rename.
+
+@router.get("/{job_id}/artefacts/product-mapping")
+def get_product_mapping(
+    job_id: str,
+    _username: str = Depends(current_username),
+) -> dict[str, Any]:
+    """Return the raw ``product_mapping.json`` payload."""
+    return _serve_artefact(
+        job_id=job_id,
+        artefact_name="product_mapping.json",
+        reader=read_product_mapping,
+    )
+
+
+@router.get("/{job_id}/artefacts/benefits")
+def get_benefits(
+    job_id: str,
+    _username: str = Depends(current_username),
+) -> dict[str, Any]:
+    """Return the raw ``benefits.json`` payload."""
+    return _serve_artefact(
+        job_id=job_id,
+        artefact_name="benefits.json",
+        reader=read_benefits,
+    )
+
+
+@router.get("/{job_id}/artefacts/faq")
+def get_faq(
+    job_id: str,
+    _username: str = Depends(current_username),
+) -> dict[str, Any]:
+    """Return the raw ``faq.json`` payload."""
+    return _serve_artefact(
+        job_id=job_id,
+        artefact_name="faq.json",
+        reader=read_faq,
+    )
+
+
+@router.get("/{job_id}/artefacts/objections")
+def get_objections(
+    job_id: str,
+    _username: str = Depends(current_username),
+) -> dict[str, Any]:
+    """Return the raw ``objections.json`` payload."""
+    return _serve_artefact(
+        job_id=job_id,
+        artefact_name="objections.json",
+        reader=read_objections,
+    )
+
+
+@router.get("/{job_id}/artefacts/critic-report")
+def get_critic_report(
+    job_id: str,
+    _username: str = Depends(current_username),
+) -> dict[str, Any]:
+    """Return the raw ``critic_report.json`` payload.
+
+    The :class:`Stage2CriticReport` validator re-runs on read,
+    including the verdict/severity cross-field rule — a tampered
+    file that pairs ``verdict = READY`` with a ``BLOCKING`` issue
+    yields HTTP 500 (on-disk corruption), not a misleading 200.
+    """
+    return _serve_artefact(
+        job_id=job_id,
+        artefact_name="critic_report.json",
+        reader=read_critic_report,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8. POST /api/jobs/{job_id}/approval/open
 # ---------------------------------------------------------------------------
 
 @router.post(
