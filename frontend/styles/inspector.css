@@ -1,0 +1,163 @@
+/*
+ * ANS Prospect Tool — minimal inspector stylesheet (step 12).
+ *
+ * Deliberately functional, not HIG-polished — step 15-17 owns the
+ * design system. We need just enough layout, contrast, and form
+ * affordances for the operator to walk a job through the fake-safe
+ * workflow.
+ */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+               Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #1a1a1a;
+  background: #fafafa;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #ffffff;
+}
+.app-title { margin: 0; font-size: 18px; font-weight: 600; }
+.app-nav a { margin-left: 4px; color: #0a6cff; text-decoration: none; }
+.app-nav a:hover { text-decoration: underline; }
+.nav-spacer { color: #999999; }
+.nav-user { color: #555555; }
+
+.app-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.app-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: #1a1a1a;
+  color: #ffffff;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  pointer-events: none;
+  max-width: 360px;
+}
+.app-toast.visible { opacity: 1; transform: translateY(0); }
+
+h2 { margin-top: 0; font-size: 20px; }
+h3 { font-size: 16px; margin-top: 24px; }
+
+.muted { color: #666666; font-size: 13px; }
+
+.btn {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  background: #ffffff;
+  color: #1a1a1a;
+}
+.btn-primary { background: #0a6cff; color: #ffffff; border-color: #0a6cff; }
+.btn-primary[disabled] { background: #b0c8ee; border-color: #b0c8ee;
+                         cursor: not-allowed; }
+.btn-secondary { background: #ffffff; border-color: #c0c0c0; }
+.btn-secondary[disabled] { color: #999999; cursor: not-allowed; }
+.btn-plain { background: transparent; color: #0a6cff; border-color: transparent; }
+.btn-plain[disabled] { color: #999999; cursor: not-allowed; }
+
+.row-actions { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+
+.auth-form {
+  max-width: 360px;
+  margin: 24px auto;
+  padding: 24px;
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+}
+.auth-form .btn { width: 100%; padding: 8px 12px; margin-top: 8px; }
+
+.form-row { display: block; margin: 12px 0; }
+.form-row span { display: block; font-size: 12px; color: #555555;
+                 margin-bottom: 4px; }
+.form-row input, .section-json, .regen-instructions {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: 1px solid #c0c0c0;
+  border-radius: 4px;
+  background: #ffffff;
+  font-family: inherit;
+}
+.section-json, .regen-instructions {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.form-banner {
+  background: #fff3f3;
+  border: 1px solid #f0c4c4;
+  color: #802020;
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
+.form-banner.hidden { display: none; }
+.form-help { color: #555555; font-size: 13px; }
+
+.artefact-list { list-style: none; padding: 0; margin: 8px 0; }
+.artefact-list li { padding: 4px 0; }
+
+.transitions { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.transitions th, .transitions td {
+  border-bottom: 1px solid #ececec;
+  padding: 4px 8px;
+  text-align: left;
+  font-size: 12px;
+  vertical-align: top;
+}
+.transitions th { color: #555555; font-weight: 600; }
+
+.detail-pre {
+  background: #f4f4f4;
+  border: 1px solid #e5e5e5;
+  border-radius: 4px;
+  padding: 8px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.briefing-header { margin-bottom: 16px; }
+.briefing-section {
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  padding: 16px;
+  margin: 16px 0;
+}
+.briefing-section.sources { background: #f8f8f8; }
+.regen-details { margin-top: 8px; }
+.regen-details summary { cursor: pointer; color: #555555; font-size: 13px; }
+.last-error { margin-top: 24px; }
+
+.hidden { display: none !important; }

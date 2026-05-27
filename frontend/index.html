@@ -1,15 +1,32 @@
 <!DOCTYPE html>
 <!--
-  ANS Prospect Tool — SPA shell
-  Implemented in step 16 (Sonnet).
+  ANS Prospect Tool — minimal inspector SPA shell (step 12).
+
+  This shell is deliberately functional, not polished — HIG-quality
+  presentation lands in step 15-17. The goal here is to expose the
+  Step 11 backend (job intake, artefact reads, approval gate) over
+  HTML so the operator can walk a job through the fake-safe workflow
+  end-to-end.
+
+  No production credentials, no model-vendor SDK, no mail delivery,
+  no document generation. The static fence in
+  tests/frontend/test_no_leakage.py enforces those exclusions.
 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="same-origin">
   <title>ANS Prospect Tool</title>
+  <link rel="stylesheet" href="/styles/inspector.css">
 </head>
 <body>
-  <!-- TODO: implement in step 16 -->
+  <header class="app-header">
+    <h1 class="app-title">ANS Prospect Tool</h1>
+    <nav class="app-nav" id="app-nav" aria-label="Primary"></nav>
+  </header>
+  <main class="app-main" id="app-main" aria-live="polite">Loading…</main>
+  <div class="app-toast" id="app-toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>
