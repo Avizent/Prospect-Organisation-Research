@@ -5,6 +5,7 @@ without updating tests/runaway/ accordingly.
 
 max_tokens per agent call:
     research:          4000
+    contact_extractor: 4000
     needs:             3000
     briefing_compiler: 8000
     mapping:           2000
@@ -20,6 +21,7 @@ Tool-call ceilings:
 
 MAX_TOKENS: dict[str, int] = {
     "research": 4000,
+    "contact_extractor": 4000,
     "needs": 3000,
     "briefing_compiler": 8000,
     "mapping": 2000,

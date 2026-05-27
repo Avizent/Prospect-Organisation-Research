@@ -121,6 +121,7 @@ def test_every_agent_has_an_explicit_ceiling() -> None:
     """
     expected = {
         "research",
+        "contact_extractor",
         "needs",
         "briefing_compiler",
         "mapping",
