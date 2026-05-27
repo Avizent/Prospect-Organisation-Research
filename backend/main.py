@@ -1,13 +1,13 @@
 """FastAPI application entry point.
 
 Currently mounts:
-  - /auth/* — setup, login, logout, me, forgot, reset (step 3)
+  - /auth/*  — setup, login, logout, me, forgot, reset    (step 3)
+  - /admin/* — Anthropic credential management            (step 4)
 
 On startup, runs `alembic upgrade head` against ~/.ans-tool/data.db so a
 fresh install reaches a usable state without manual CLI steps.
 
 Later steps will add:
-  - /admin/credentials (step 4)
   - /jobs/* (step 7+)
   - static UI mounts (step 16)
   - Ghostscript/Poppler probes and concurrent-job semaphore
@@ -22,6 +22,7 @@ from alembic import command as alembic_command
 from alembic.config import Config
 from fastapi import FastAPI
 
+from backend.admin.routes import router as admin_router
 from backend.auth.routes import router as auth_router
 
 
@@ -48,6 +49,7 @@ app = FastAPI(
 )
 
 app.include_router(auth_router, prefix="/auth")
+app.include_router(admin_router, prefix="/admin")
 
 
 @app.get("/health")
