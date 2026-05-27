@@ -1,14 +1,20 @@
 """Tests for :mod:`backend.jobs.state`.
 
-Step 7a wires the enum and the transition primitive, but ships **no
-allowed transitions**. These tests pin both halves of that promise:
+Step 7b enables three edges and pins the rest as illegal:
 
-* the canonical handover state list appears verbatim in the enum
-* the transition primitive raises :class:`IllegalTransition` for
-  *every* pair (including same-state self-loops)
-* the primitive validates types and records the timestamp
-* :data:`_ALLOWED_TRANSITIONS` is empty (a future PR that adds an
-  edge must update this test, which makes the change reviewable)
+* ``created → researching``
+* ``researching → briefing_ready``
+* ``researching → failed``
+
+These tests assert both halves: the three legal pairs succeed and
+return a well-shaped :class:`TransitionRecord`; every other pair
+(including self-loops, reverse edges, and any future-stage edge
+not yet enabled) raises :class:`IllegalTransition`.
+
+A future PR that enables a new edge must update
+:data:`_LEGAL_EDGES` here. That's intentional — every new edge in
+``_ALLOWED_TRANSITIONS`` is a real protocol change and should be
+visible in the review surface.
 """
 
 from __future__ import annotations
@@ -58,30 +64,104 @@ def test_enum_has_no_extra_off_spec_states() -> None:
 # Allowed-transitions set
 # ---------------------------------------------------------------------------
 
-def test_allowed_transitions_set_is_empty_in_step_7a() -> None:
-    """Step 7a deliberately enables no edges. Step 7b will add the
-    first. A future PR that activates an edge must update this test."""
-    assert state_mod._ALLOWED_TRANSITIONS == frozenset()
+_LEGAL_EDGES: frozenset[tuple[JobState, JobState]] = frozenset({
+    (JobState.CREATED, JobState.RESEARCHING),
+    (JobState.RESEARCHING, JobState.BRIEFING_READY),
+    (JobState.RESEARCHING, JobState.FAILED),
+})
+
+
+def test_allowed_transitions_set_matches_step_7b_edges_exactly() -> None:
+    """Step 7b ships three edges and no others. A future PR that adds
+    an edge must update both ``_ALLOWED_TRANSITIONS`` and
+    :data:`_LEGAL_EDGES` in this file — which forces the change
+    through review."""
+    assert state_mod._ALLOWED_TRANSITIONS == _LEGAL_EDGES
+
+
+# ---------------------------------------------------------------------------
+# apply_transition — legal pairs
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "from_state,to_state",
+    sorted(_LEGAL_EDGES, key=lambda p: (p[0].value, p[1].value)),
+    ids=lambda v: v.value if isinstance(v, JobState) else str(v),
+)
+def test_legal_edge_returns_transition_record(
+    from_state: JobState, to_state: JobState
+) -> None:
+    fixed = datetime(2026, 5, 27, 12, 0, 0, tzinfo=timezone.utc)
+    record = apply_transition(
+        from_state=from_state,
+        to_state=to_state,
+        reason="test edge",
+        now=fixed,
+    )
+    assert isinstance(record, TransitionRecord)
+    assert record.from_state is from_state
+    assert record.to_state is to_state
+    assert record.at == fixed
+    assert record.reason == "test edge"
 
 
 # ---------------------------------------------------------------------------
 # apply_transition — illegal pairs
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("to_state", list(JobState))
-def test_every_transition_from_created_is_illegal_in_step_7a(
-    to_state: JobState,
+_ALL_PAIRS = [
+    (a, b) for a in JobState for b in JobState
+]
+_ILLEGAL_PAIRS = [pair for pair in _ALL_PAIRS if pair not in _LEGAL_EDGES]
+
+
+@pytest.mark.parametrize(
+    "from_state,to_state",
+    _ILLEGAL_PAIRS,
+    ids=lambda v: v.value if isinstance(v, JobState) else str(v),
+)
+def test_illegal_pair_raises(
+    from_state: JobState, to_state: JobState
 ) -> None:
     with pytest.raises(IllegalTransition) as exc_info:
-        apply_transition(from_state=JobState.CREATED, to_state=to_state)
-    assert exc_info.value.from_state is JobState.CREATED
+        apply_transition(from_state=from_state, to_state=to_state)
+    assert exc_info.value.from_state is from_state
     assert exc_info.value.to_state is to_state
 
 
-def test_self_loop_created_to_created_is_illegal() -> None:
+def test_self_loop_researching_to_researching_is_illegal() -> None:
+    """Self-loops are not in the legal set; pin this explicitly so a
+    future regression cannot quietly permit them."""
     with pytest.raises(IllegalTransition):
         apply_transition(
-            from_state=JobState.CREATED, to_state=JobState.CREATED
+            from_state=JobState.RESEARCHING,
+            to_state=JobState.RESEARCHING,
+        )
+
+
+def test_reverse_of_legal_edge_is_illegal() -> None:
+    """The legal edges are directed; the reverse direction is not
+    permitted (a job cannot un-research)."""
+    with pytest.raises(IllegalTransition):
+        apply_transition(
+            from_state=JobState.RESEARCHING,
+            to_state=JobState.CREATED,
+        )
+    with pytest.raises(IllegalTransition):
+        apply_transition(
+            from_state=JobState.BRIEFING_READY,
+            to_state=JobState.RESEARCHING,
+        )
+
+
+def test_briefing_ready_to_user_editing_is_not_yet_enabled() -> None:
+    """Sanity-check that downstream Step 8 edges are still illegal.
+    When Step 8 enables this edge, this test should flip — and that
+    flip must appear in the diff."""
+    with pytest.raises(IllegalTransition):
+        apply_transition(
+            from_state=JobState.BRIEFING_READY,
+            to_state=JobState.USER_EDITING,
         )
 
 
@@ -106,46 +186,22 @@ def test_to_state_must_be_jobstate_instance() -> None:
 
 
 # ---------------------------------------------------------------------------
-# apply_transition — return shape (exercised once the edge set is non-empty)
+# apply_transition — default timestamp
 # ---------------------------------------------------------------------------
 
-def test_transition_record_shape_via_temporary_edge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """We need at least one legal pair to exercise the success-path
-    return contract. Patch the allowed set to contain one edge for
-    the duration of this test only."""
-    monkeypatch.setattr(
-        state_mod,
-        "_ALLOWED_TRANSITIONS",
-        frozenset({(JobState.CREATED, JobState.RESEARCHING)}),
-    )
-    fixed_now = datetime(2026, 5, 27, 12, 0, 0, tzinfo=timezone.utc)
+def test_transition_default_now_is_utc() -> None:
+    """Default ``now`` is wall clock; assert tz-aware UTC."""
     record = apply_transition(
-        from_state=JobState.CREATED,
-        to_state=JobState.RESEARCHING,
-        reason="orchestrator pickup",
-        now=fixed_now,
-    )
-    assert isinstance(record, TransitionRecord)
-    assert record.from_state is JobState.CREATED
-    assert record.to_state is JobState.RESEARCHING
-    assert record.at == fixed_now
-    assert record.reason == "orchestrator pickup"
-
-
-def test_transition_default_now_is_utc(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        state_mod,
-        "_ALLOWED_TRANSITIONS",
-        frozenset({(JobState.CREATED, JobState.FAILED)}),
-    )
-    record = apply_transition(
-        from_state=JobState.CREATED, to_state=JobState.FAILED
+        from_state=JobState.CREATED, to_state=JobState.RESEARCHING
     )
     assert record.at.tzinfo is not None
-    assert record.at.utcoffset() == record.at.tzinfo.utcoffset(record.at)
-    # Specifically UTC offset zero.
-    assert record.at.utcoffset().total_seconds() == 0
+    offset = record.at.utcoffset()
+    assert offset is not None
+    assert offset.total_seconds() == 0
+
+
+def test_reason_defaults_to_none() -> None:
+    record = apply_transition(
+        from_state=JobState.CREATED, to_state=JobState.RESEARCHING
+    )
+    assert record.reason is None

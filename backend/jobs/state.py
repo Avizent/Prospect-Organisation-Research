@@ -1,4 +1,4 @@
-"""Job state machine — the canonical lifecycle, plus an empty edge set.
+"""Job state machine — the canonical lifecycle and the Step 7b edge set.
 
 The state list mirrors the handover §9.1 exactly:
 
@@ -6,26 +6,41 @@ The state list mirrors the handover §9.1 exactly:
     regenerating_section → approved → generating_documents →
     complete | failed
 
-Step 7a deliberately enables **no transitions** — every call to
-:func:`apply_transition` raises :class:`IllegalTransition`. Intake
-opens the row at :attr:`JobState.created` and stops.
+Step 7b enables exactly three edges — the ones the fake-only
+ResearchAgent orchestration needs:
 
-Why no edges yet
-----------------
+* ``created → researching``     (orchestrator picks the job up)
+* ``researching → briefing_ready`` (ResearchAgent returned a valid
+  dossier; the row is ready for the briefing-compile stage in Step 8)
+* ``researching → failed``      (RunawayTrap, AgentOutputInvalid, or
+  any other exception from the agent run)
 
-A live edge implies *something* is allowed to drive it. In Step 7a
-nothing drives anything: no orchestrator, no agent, no semaphore. If
-we shipped a permissive edge here, the next step's wiring would have
-to thread carefully around a half-built transition table. Empty is
-honest, and the test in
-``tests/jobs/test_state_machine.py`` pins it so a future PR cannot
-silently activate edges without updating the test (and therefore the
-review surface).
+No other edges are live yet. ``briefing_ready → user_editing`` and
+beyond are out of scope for Step 7b and any call to
+:func:`apply_transition` for those pairs still raises
+:class:`IllegalTransition`. The same is true of self-loops and
+reverse edges.
 
-The transition primitive itself, however, is real — it validates
-input types, records the timestamp, and returns a typed result. Step
-7b will populate ``_ALLOWED_TRANSITIONS`` to enable the canonical
-edges in order.
+Why this exact set
+------------------
+
+A live edge implies *something* is allowed to drive it. Step 7b
+introduces the orchestrator and the fake-only ResearchAgent
+execution path, so the three edges above are precisely the ones
+that path requires. Adding ``briefing_ready → user_editing`` or
+the regen/approve/generate edges would be premature: nothing drives
+them in this step, and a permissive transition would silently
+disguise a broken handoff into the next step. Empty wasn't tenable
+once the orchestrator exists; minimal is honest.
+
+The test ``tests/jobs/test_state_machine.py`` pins both halves —
+the three legal edges work, every other pair is illegal — so a
+future PR cannot quietly activate an edge without updating the
+test (and therefore the review surface).
+
+The transition primitive itself remains pure: it validates input
+types, records the timestamp, and returns a typed result. Step 8
+will add the next batch of edges as the briefing flow lands.
 """
 
 from __future__ import annotations
@@ -82,10 +97,16 @@ class IllegalTransition(Exception):
 # Allowed transitions
 # ---------------------------------------------------------------------------
 
-#: Step 7a: deliberately empty. Step 7b will populate this. Tests
-#: assert the set is empty so accidental activations are caught in
-#: review.
-_ALLOWED_TRANSITIONS: FrozenSet[Tuple[JobState, JobState]] = frozenset()
+#: Step 7b enables three edges: created→researching (pickup),
+#: researching→briefing_ready (ResearchAgent success → dossier
+#: persisted), researching→failed (any exception during the agent
+#: run). Tests assert this exact set so a future PR cannot
+#: activate an edge without updating the test.
+_ALLOWED_TRANSITIONS: FrozenSet[Tuple[JobState, JobState]] = frozenset({
+    (JobState.CREATED, JobState.RESEARCHING),
+    (JobState.RESEARCHING, JobState.BRIEFING_READY),
+    (JobState.RESEARCHING, JobState.FAILED),
+})
 
 
 # ---------------------------------------------------------------------------

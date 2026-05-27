@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from backend.agents.research_models import ResearchDossier
-from backend.jobs.state import JobState
+from backend.jobs.state import JobState, TransitionRecord
 
 
 # ---------------------------------------------------------------------------
@@ -175,9 +175,10 @@ def write_initial_state(
 ) -> JobStateFile:
     """Write the first state.json for a freshly-created job.
 
-    Step 7a only ever writes a row at :attr:`JobState.CREATED` with an
-    empty ``transitions`` list and ``last_error=None``. Step 7b will
-    extend this with an ``append_transition`` helper.
+    The row is opened at :attr:`JobState.CREATED` with an empty
+    ``transitions`` list and ``last_error=None``. Subsequent edges are
+    persisted by :func:`append_transition`; failures are recorded by
+    :func:`record_failure`.
     """
     when = created_at if created_at is not None else datetime.now(timezone.utc)
     record = JobStateFile(
@@ -229,6 +230,118 @@ def read_state(job_id: str) -> JobStateFile:
         transitions=list(raw.get("transitions") or []),
         last_error=raw.get("last_error"),
     )
+
+
+# ---------------------------------------------------------------------------
+# state.json — transition / failure mutators
+# ---------------------------------------------------------------------------
+
+def append_transition(job_id: str, record: TransitionRecord) -> JobStateFile:
+    """Append a transition to ``state.json`` and update ``current_state``.
+
+    Read-modify-write through the atomic JSON helper. The on-disk
+    ``transitions`` list grows by one entry per call, in chronological
+    order. ``current_state`` is updated to the transition's
+    ``to_state``.
+
+    The function does **not** validate that the transition is legal —
+    callers are expected to call :func:`backend.jobs.state.apply_transition`
+    first, which returns a :class:`TransitionRecord` only if the edge
+    is in :data:`backend.jobs.state._ALLOWED_TRANSITIONS`. By the time
+    a record reaches this function the legality check has already
+    happened upstream.
+
+    Raises :class:`JobNotFound` if no state.json exists for the job.
+    """
+    if not isinstance(record, TransitionRecord):
+        raise TypeError(
+            f"record must be a TransitionRecord, got {type(record).__name__}"
+        )
+
+    existing = read_state(job_id)
+    transitions = list(existing.transitions)
+    transitions.append(
+        {
+            "from": record.from_state.value,
+            "to": record.to_state.value,
+            "at": _iso(record.at),
+            "reason": record.reason,
+        }
+    )
+
+    updated = JobStateFile(
+        job_id=existing.job_id,
+        company_name=existing.company_name,
+        company_url=existing.company_url,
+        current_state=record.to_state,
+        created_at=existing.created_at,
+        transitions=transitions,
+        last_error=existing.last_error,
+    )
+
+    payload = {
+        "job_id": updated.job_id,
+        "company_name": updated.company_name,
+        "company_url": updated.company_url,
+        "current_state": updated.current_state.value,
+        "created_at": _iso(updated.created_at),
+        "transitions": list(updated.transitions),
+        "last_error": updated.last_error,
+    }
+    _atomic_write_json(_state_path(job_id), payload)
+    return updated
+
+
+def record_failure(
+    job_id: str,
+    *,
+    category: str,
+    details: str,
+) -> JobStateFile:
+    """Stamp ``last_error`` on state.json without touching ``current_state``.
+
+    ``current_state`` is left alone — the caller is expected to have
+    already applied a ``→ failed`` transition via
+    :func:`append_transition` (which carries its own legality check).
+    Splitting the two operations keeps each one small enough to reason
+    about: ``append_transition`` records the *fact* of the transition;
+    ``record_failure`` records the *diagnostic context* that explains
+    why the transition happened.
+
+    ``category`` is a short, stable label (e.g. ``"runaway_trap"``,
+    ``"output_invalid"``, ``"crashed"``) consumed by the UI/CLI. The
+    long-form ``details`` string is the human-readable explanation
+    (``str(exc)``) and **must not contain secret material** — callers
+    are expected to use the exception's ``reason`` attribute (for
+    :class:`RunawayTrapFired`) rather than ``repr(exc)``, which can
+    leak constructor state.
+
+    Raises :class:`JobNotFound` if no state.json exists for the job.
+    """
+    existing = read_state(job_id)
+    last_error = {"category": category, "details": details}
+
+    updated = JobStateFile(
+        job_id=existing.job_id,
+        company_name=existing.company_name,
+        company_url=existing.company_url,
+        current_state=existing.current_state,
+        created_at=existing.created_at,
+        transitions=list(existing.transitions),
+        last_error=last_error,
+    )
+
+    payload = {
+        "job_id": updated.job_id,
+        "company_name": updated.company_name,
+        "company_url": updated.company_url,
+        "current_state": updated.current_state.value,
+        "created_at": _iso(updated.created_at),
+        "transitions": list(updated.transitions),
+        "last_error": updated.last_error,
+    }
+    _atomic_write_json(_state_path(job_id), payload)
+    return updated
 
 
 # ---------------------------------------------------------------------------

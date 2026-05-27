@@ -21,14 +21,16 @@ from pathlib import Path
 import pytest
 
 from backend.agents.research_models import ResearchDossier
-from backend.jobs.state import JobState
+from backend.jobs.state import JobState, TransitionRecord
 from backend.jobs.storage import (
     JobNotFound,
+    append_transition,
     create_job_folder,
     job_folder,
     jobs_root,
     read_dossier,
     read_state,
+    record_failure,
     write_dossier,
     write_initial_state,
 )
@@ -265,3 +267,191 @@ def test_write_dossier_auto_creates_folder_if_missing(
     # Intentionally do not call create_job_folder.
     path = write_dossier(job_id, sample_dossier)
     assert path.exists()
+
+
+# ---------------------------------------------------------------------------
+# append_transition
+# ---------------------------------------------------------------------------
+
+def _seed_initial(job_id: str) -> None:
+    create_job_folder(job_id)
+    write_initial_state(
+        job_id=job_id,
+        company_name="Acme Ltd",
+        company_url="https://acme.example.com/",
+        created_at=datetime(2026, 5, 27, 12, 0, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_append_transition_updates_current_state_and_grows_list(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    _seed_initial(job_id)
+    record = TransitionRecord(
+        from_state=JobState.CREATED,
+        to_state=JobState.RESEARCHING,
+        at=datetime(2026, 5, 27, 12, 1, 0, tzinfo=timezone.utc),
+        reason="orchestrator pickup",
+    )
+    updated = append_transition(job_id, record)
+
+    assert updated.current_state is JobState.RESEARCHING
+    assert len(updated.transitions) == 1
+    on_disk = json.loads(
+        (isolated_jobs_root / job_id / "state.json").read_text("utf-8")
+    )
+    assert on_disk["current_state"] == "researching"
+    assert on_disk["transitions"] == [
+        {
+            "from": "created",
+            "to": "researching",
+            "at": "2026-05-27T12:01:00Z",
+            "reason": "orchestrator pickup",
+        }
+    ]
+
+
+def test_append_transition_appends_in_order(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    _seed_initial(job_id)
+    append_transition(
+        job_id,
+        TransitionRecord(
+            from_state=JobState.CREATED,
+            to_state=JobState.RESEARCHING,
+            at=datetime(2026, 5, 27, 12, 1, 0, tzinfo=timezone.utc),
+            reason="pickup",
+        ),
+    )
+    append_transition(
+        job_id,
+        TransitionRecord(
+            from_state=JobState.RESEARCHING,
+            to_state=JobState.BRIEFING_READY,
+            at=datetime(2026, 5, 27, 12, 5, 0, tzinfo=timezone.utc),
+            reason="dossier persisted",
+        ),
+    )
+    loaded = read_state(job_id)
+    assert loaded.current_state is JobState.BRIEFING_READY
+    assert [t["to"] for t in loaded.transitions] == [
+        "researching",
+        "briefing_ready",
+    ]
+
+
+def test_append_transition_rejects_non_record_value(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    _seed_initial(job_id)
+    with pytest.raises(TypeError):
+        append_transition(job_id, {"from": "created"})  # type: ignore[arg-type]
+
+
+def test_append_transition_raises_when_no_state_file(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    with pytest.raises(JobNotFound):
+        append_transition(
+            job_id,
+            TransitionRecord(
+                from_state=JobState.CREATED,
+                to_state=JobState.RESEARCHING,
+                at=datetime.now(timezone.utc),
+                reason=None,
+            ),
+        )
+
+
+def test_append_transition_leaves_no_tmp_file_behind(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    _seed_initial(job_id)
+    append_transition(
+        job_id,
+        TransitionRecord(
+            from_state=JobState.CREATED,
+            to_state=JobState.RESEARCHING,
+            at=datetime(2026, 5, 27, 12, 1, 0, tzinfo=timezone.utc),
+            reason=None,
+        ),
+    )
+    folder = isolated_jobs_root / job_id
+    assert list(folder.glob("*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# record_failure
+# ---------------------------------------------------------------------------
+
+def test_record_failure_writes_last_error_without_changing_state(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    _seed_initial(job_id)
+    # Move it to researching first so we can prove the state is preserved.
+    append_transition(
+        job_id,
+        TransitionRecord(
+            from_state=JobState.CREATED,
+            to_state=JobState.RESEARCHING,
+            at=datetime(2026, 5, 27, 12, 1, 0, tzinfo=timezone.utc),
+            reason="pickup",
+        ),
+    )
+    # And then to failed via append_transition.
+    append_transition(
+        job_id,
+        TransitionRecord(
+            from_state=JobState.RESEARCHING,
+            to_state=JobState.FAILED,
+            at=datetime(2026, 5, 27, 12, 2, 0, tzinfo=timezone.utc),
+            reason="runaway_trap",
+        ),
+    )
+
+    updated = record_failure(
+        job_id, category="runaway_trap", details="JobBudgetExceeded fired"
+    )
+
+    assert updated.current_state is JobState.FAILED
+    assert updated.last_error == {
+        "category": "runaway_trap",
+        "details": "JobBudgetExceeded fired",
+    }
+    on_disk = json.loads(
+        (isolated_jobs_root / job_id / "state.json").read_text("utf-8")
+    )
+    assert on_disk["current_state"] == "failed"
+    assert on_disk["last_error"] == {
+        "category": "runaway_trap",
+        "details": "JobBudgetExceeded fired",
+    }
+    # Transitions list is untouched.
+    assert len(on_disk["transitions"]) == 2
+
+
+def test_record_failure_raises_when_no_state_file(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    with pytest.raises(JobNotFound):
+        record_failure(job_id, category="crashed", details="boom")
+
+
+def test_record_failure_overwrites_previous_last_error(
+    isolated_jobs_root: Path,
+) -> None:
+    """Second failure on the same row replaces the first — last_error
+    is the *most recent* diagnostic, not a list."""
+    job_id = _new_job_id()
+    _seed_initial(job_id)
+    record_failure(job_id, category="output_invalid", details="first")
+    updated = record_failure(job_id, category="crashed", details="second")
+    assert updated.last_error == {"category": "crashed", "details": "second"}
