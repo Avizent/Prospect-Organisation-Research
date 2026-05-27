@@ -1,20 +1,19 @@
 """Database engine and session factory.
 
 Public API:
-    get_engine() -> Engine   — returns a configured SQLite engine.
-    get_session() -> Session — returns a bound session; caller must close it.
+    get_engine() -> Engine        — returns a configured SQLite engine.
+    get_session() -> Session      — returns a bound session; caller closes it.
+    get_db() -> Iterator[Session] — FastAPI dependency; closes on request end.
 
 Database path: ~/.ans-tool/data.db
 The ~/.ans-tool/ directory is created on first call if absent.
-
-FastAPI dependency injection (get_db) will be wired in a later step
-once route handlers are in place.
 """
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
-from sqlalchemy import create_engine, Engine
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -60,3 +59,19 @@ def get_session() -> Session:
     engine = get_engine()
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     return factory()
+
+
+def get_db() -> Iterator[Session]:
+    """FastAPI dependency that yields a Session and closes it after use.
+
+    Usage in a route:
+        @router.get("/x")
+        def x(db: Session = Depends(get_db)): ...
+
+    The session is always closed, even if the route raises.
+    """
+    session = get_session()
+    try:
+        yield session
+    finally:
+        session.close()
