@@ -1,0 +1,42 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Local database / runtime files
+*.db
+*.sqlite
+*.sqlite3
+ans_tool.db
+incidents.jsonl
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Build / logs
+dist/
+build/
+*.log
+
+# Generated output
+exports/
+generated/
+output/
