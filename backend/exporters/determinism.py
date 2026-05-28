@@ -130,21 +130,107 @@ def canonicalize_zip(zip_bytes: bytes) -> bytes:
     return out_buf.getvalue()
 
 
-def strip_pdf_dates(pdf_bytes: bytes) -> bytes:
-    """Placeholder for the PDF date-stripping pass.
+def strip_pdf_dates(pdf_bytes: bytes, *, id_seed: bytes | None = None) -> bytes:
+    """Strip wall-clock metadata from a PDF so it is byte-reproducible.
 
-    The real implementation lands in Step 36 with the PDF renderer
-    (it will use ``pikepdf`` to remove ``/CreationDate``, ``/ModDate``
-    and rewrite ``/Producer`` and ``/Creator`` to ``PRODUCER_STRING``).
+    WeasyPrint stamps ``/CreationDate`` and ``/ModDate`` into the PDF
+    info dictionary at render time, and also emits an XMP packet in
+    ``/Root/Metadata`` carrying the same timestamps. Both move every
+    re-render even when the source HTML/CSS are byte-identical. The
+    third source of drift is the trailer ``/ID`` array, which PDF
+    readers cache; WeasyPrint seeds it from a clock-derived UUID.
 
-    Step 35 ships only the stub so the surface is visible — calling
-    it raises ``NotImplementedError`` to make accidental wiring loud.
+    This helper does four things — and only four:
+
+      1. Delete ``/CreationDate`` and ``/ModDate`` from the info dict.
+      2. Overwrite ``/Producer`` and ``/Creator`` with
+         :data:`PRODUCER_STRING` (the pinned brand string).
+      3. Delete the XMP metadata stream at ``/Root/Metadata`` if
+         present — it duplicates what we just rewrote in the info
+         dict and carries its own embedded timestamps.
+      4. Save the PDF with pikepdf's ``deterministic_id=True`` flag so
+         the trailer ``/ID`` array is derived from a SHA-256 of the
+         document objects rather than from the system clock. When
+         ``id_seed`` is supplied we additionally splice the first 16
+         bytes of the seed into the *first* slot of the resulting
+         ``/ID`` array (the "original file identifier"); the *second*
+         slot stays as the content-hash value pikepdf computed, which
+         keeps the second-pass write byte-stable across runs.
+
+    The output is the re-saved PDF bytes. We pass
+    ``linearize=False`` so pikepdf does not run a second writer pass
+    that would re-introduce wall-clock noise via cross-reference
+    timestamps.
     """
-    raise NotImplementedError(
-        "strip_pdf_dates is reserved for Step 36's PDF renderer; "
-        "Step 35 ships only the surface so the renderer wiring lands "
-        "atomically with its tests."
+    # Local import — pikepdf is a heavy native dep we do not want to
+    # pull in at package-import time. The static fence in
+    # ``tests/exporters/test_no_forbidden_imports.py`` parametrises
+    # the import scan, but ``pikepdf`` is not on the forbidden list.
+    import pikepdf
+
+    with pikepdf.open(io.BytesIO(pdf_bytes)) as pdf:
+        info = pdf.docinfo
+        for key in ("/CreationDate", "/ModDate"):
+            if key in info:
+                del info[key]
+        info["/Producer"] = PRODUCER_STRING
+        info["/Creator"] = PRODUCER_STRING
+
+        # The XMP packet is not part of /Info — it sits at
+        # ``/Root/Metadata`` as a content stream. Drop it entirely;
+        # we have no need for XMP and keeping it would re-introduce
+        # the very wall-clock fields we just stripped above.
+        if "/Metadata" in pdf.Root:
+            del pdf.Root["/Metadata"]
+
+        out = io.BytesIO()
+        pdf.save(out, linearize=False, deterministic_id=True)
+        saved = out.getvalue()
+
+    if id_seed is None:
+        return saved
+
+    # Splice the markdown-derived seed into the first slot of the
+    # trailer ``/ID`` array. pikepdf has already written a
+    # content-derived value into both slots; we want the first slot
+    # (the "permanent file identifier") to be derivable from the
+    # source markdown so an operator can verify provenance without
+    # parsing the whole PDF. The second slot stays as the content
+    # hash, so two byte-identical PDFs still have byte-identical
+    # /ID arrays.
+    return _splice_id_seed(saved, id_seed[:16].ljust(16, b"\x00"))
+
+
+def _splice_id_seed(pdf_bytes: bytes, seed: bytes) -> bytes:
+    """Rewrite the first /ID slot in ``pdf_bytes`` to ``seed``.
+
+    pikepdf's ``deterministic_id=True`` emits the trailer ID as
+    ``/ID [<HHHH...><HHHH...>]`` where each ``HHHH`` is a 32-char
+    hex string. We locate that pattern textually and replace the
+    first hex string with ``seed.hex().upper()``. The /ID array is
+    the only trailer field whose syntactic shape is fixed enough to
+    splice safely by regex — the rest of the file is left untouched.
+    """
+    import re
+
+    # ``/ID [<aabbcc...><ddeeff...>]`` with optional whitespace.
+    pattern = re.compile(
+        rb"/ID\s*\[\s*<([0-9A-Fa-f]{32})>\s*<([0-9A-Fa-f]{32})>\s*\]"
     )
+    new_first = seed.hex().upper().encode("ascii")
+
+    def _replace(m: "re.Match[bytes]") -> bytes:
+        return b"/ID [<" + new_first + b"><" + m.group(2) + b">]"
+
+    spliced, count = pattern.subn(_replace, pdf_bytes, count=1)
+    if count != 1:
+        # Defensive: if the layout shifts in a future pikepdf release
+        # we surface the failure rather than silently emitting an
+        # unseeded /ID.
+        raise RuntimeError(
+            "could not splice /ID seed — trailer /ID layout changed"
+        )
+    return spliced
 
 
 __all__ = [

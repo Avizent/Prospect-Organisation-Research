@@ -213,6 +213,148 @@ function _renderSections(manifest) {
 }
 
 
+// ---------------------------------------------------------------------------
+// Step 36: exports section
+// ---------------------------------------------------------------------------
+//
+// The PDF export is rendered as two visually-distinct controls that never
+// merge into a single "click here" affordance:
+//
+//   - "Generate PDF" button — POSTs ``/api/jobs/{id}/export/pdf``. On a
+//     201/200 we re-render the screen so the new ``exports[]`` entry shows
+//     up, alongside the download link.
+//   - "Download PDF" anchor — opens ``/api/jobs/{id}/exports/pdf`` directly
+//     so the browser handles the stream. Only appears once an export
+//     entry exists in the manifest.
+//
+// The two MUST be separate elements (see
+// ``tests/frontend/test_manifest_viewer_exports.py``): a user clicking
+// "Generate" must not silently trigger a download, and vice-versa.
+
+function _findPdfExportEntry(manifest) {
+  const exports = Array.isArray(manifest.exports) ? manifest.exports : [];
+  for (const entry of exports) {
+    if (entry && entry.format === "pdf") return entry;
+  }
+  return null;
+}
+
+
+function _renderExports(container, jobId, manifest) {
+  const wrap = el("section", { class: "manifest-exports" }, [
+    el("h3", { text: "Exports" }),
+  ]);
+
+  // 1. Generate button — always present (regeneration is allowed and bumps
+  //    ``regeneration_count`` on the manifest entry).
+  const generateBtn = el("button", {
+    type: "button",
+    class: "btn-generate-pdf",
+    text: "Generate PDF",
+  });
+  generateBtn.addEventListener("click", async () => {
+    generateBtn.disabled = true;
+    generateBtn.textContent = "Generating…";
+    try {
+      await api.runPdfExport(jobId);
+      // Re-render the whole screen so the new exports[] entry appears
+      // and the Download link materialises.
+      await render(container, { id: jobId });
+    } catch (err) {
+      generateBtn.disabled = false;
+      generateBtn.textContent = "Generate PDF";
+      if (err instanceof ApiError && err.status === 401) {
+        navigate("#/login");
+        return;
+      }
+      const banner = el("div", { class: "form-banner", role: "alert" }, [
+        el("p", {
+          text: err instanceof ApiError
+            ? `PDF generation failed (HTTP ${err.status}).`
+            : `PDF generation failed: ${err && err.message ? err.message : String(err)}`,
+        }),
+        el("pre", {
+          class: "detail-pre",
+          text: err instanceof ApiError ? formatDetail(err.detail) : "",
+        }),
+      ]);
+      wrap.appendChild(banner);
+    }
+  });
+  wrap.appendChild(el("p", {}, [generateBtn]));
+
+  // 2. Download link — only if an entry exists. Distinct element so the
+  //    operator can re-download the existing file without triggering a
+  //    re-render.
+  const entry = _findPdfExportEntry(manifest);
+  if (entry) {
+    const downloadLink = el("a", {
+      class: "btn-download-pdf",
+      href: `/api/jobs/${encodeURIComponent(jobId)}/exports/pdf`,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      text: "Download PDF",
+    });
+    wrap.appendChild(el("p", {}, [downloadLink]));
+
+    // Lightweight provenance projection so operators can verify the
+    // ``regeneration_count`` and the renderer versions at a glance.
+    const meta = el("ul", { class: "manifest-exports-meta" });
+    meta.appendChild(el("li", {}, [
+      el("strong", { text: "Filename: " }),
+      el("span", { text: String(entry.filename || "—") }),
+    ]));
+    meta.appendChild(el("li", {}, [
+      el("strong", { text: "Byte length: " }),
+      el("span", { text: String(entry.byte_length ?? "—") }),
+    ]));
+    meta.appendChild(el("li", {}, [
+      el("strong", { text: "SHA-256: " }),
+      el("code", {
+        class: "manifest-sha",
+        text: String(entry.sha256 || "—"),
+      }),
+    ]));
+    meta.appendChild(el("li", {}, [
+      el("strong", { text: "Exporter version: " }),
+      el("span", { text: String(entry.exporter_version || "—") }),
+    ]));
+    meta.appendChild(el("li", {}, [
+      el("strong", { text: "Template version: " }),
+      el("span", { text: String(entry.template_version || "—") }),
+    ]));
+    const renderer = entry.renderer && typeof entry.renderer === "object"
+      ? entry.renderer : {};
+    meta.appendChild(el("li", {}, [
+      el("strong", { text: "Renderer: " }),
+      el("span", {
+        text: `${renderer.name || "—"} ${renderer.version || ""}`.trim(),
+      }),
+    ]));
+    const md = entry.markdown_renderer && typeof entry.markdown_renderer === "object"
+      ? entry.markdown_renderer : {};
+    meta.appendChild(el("li", {}, [
+      el("strong", { text: "Markdown renderer: " }),
+      el("span", {
+        text: `${md.name || "—"} ${md.version || ""}`.trim(),
+      }),
+    ]));
+    meta.appendChild(el("li", {}, [
+      el("strong", { text: "Regeneration count: " }),
+      el("span", { text: String(entry.regeneration_count ?? 0) }),
+    ]));
+    wrap.appendChild(meta);
+  } else {
+    wrap.appendChild(el("p", {
+      class: "muted",
+      text: "(no PDF generated yet)",
+    }));
+  }
+
+  return wrap;
+}
+
+
 function _renderWarnings(manifest) {
   const wrap = el("section", { class: "manifest-warnings" }, [
     el("h3", { text: "Warnings" }),
@@ -295,5 +437,6 @@ export async function render(container, params) {
   container.appendChild(_renderOutputs(manifest));
   container.appendChild(_renderArtefacts(manifest));
   container.appendChild(_renderSections(manifest));
+  container.appendChild(_renderExports(container, id, manifest));
   container.appendChild(_renderWarnings(manifest));
 }

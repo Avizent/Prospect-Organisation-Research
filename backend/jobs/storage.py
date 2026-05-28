@@ -824,6 +824,157 @@ def write_document_manifest(
     return target
 
 
+# ---------------------------------------------------------------------------
+# Exports (Step 36)
+# ---------------------------------------------------------------------------
+#
+# The export layer (``backend.exporters``) produces derivative artefacts
+# from the canonical Markdown brief. Files land under
+# ``~/.ans-tool/jobs/{job_id}/exports/`` and their provenance is
+# recorded in the manifest's ``exports[]`` array.
+#
+# Storage helpers here are deliberately schema-agnostic about the
+# *renderer* — they take ``format`` as a short token (``"pdf"``,
+# ``"docx"``, ...) and ``bytes`` and persist verbatim. The exporter
+# package is the single source of truth for what bytes a given
+# ``format`` carries.
+#
+# ``upsert_export_entry`` is the one place that knows the manifest's
+# v2 ``exports[]`` schema. It performs an in-place upsert so the
+# array stays compact (one entry per format) and a regeneration
+# preserves ``regeneration_count`` rather than resetting it.
+
+_EXPORT_FORMATS: frozenset[str] = frozenset({"pdf"})  # Step 36 ships PDF only
+
+_EXPORT_FILENAMES: dict[str, str] = {
+    "pdf": "prospect_brief.pdf",
+}
+
+
+def _exports_folder(job_id: str) -> Path:
+    return job_folder(job_id) / "exports"
+
+
+def _export_path(job_id: str, format: str) -> Path:
+    if format not in _EXPORT_FORMATS:
+        raise ValueError(
+            f"unknown export format {format!r}; "
+            f"expected one of {sorted(_EXPORT_FORMATS)}"
+        )
+    return _exports_folder(job_id) / _EXPORT_FILENAMES[format]
+
+
+def _atomic_write_bytes(target: Path, payload: bytes) -> None:
+    """Atomically write raw bytes to ``target`` (same pattern as the
+    JSON/text helpers above: write-tmp-then-``os.replace``).
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(payload)
+    os.replace(tmp, target)
+
+
+def write_export(job_id: str, format: str, payload: bytes) -> Path:
+    """Write the export bytes to ``exports/{filename}`` atomically.
+
+    Returns the path written. Creates the per-job exports folder if
+    absent. Does NOT touch the manifest — callers compose the write
+    with :func:`upsert_export_entry` so the on-disk file and the
+    manifest entry land together. (We deliberately do PDF-first then
+    manifest: a crash between the two leaves an orphan PDF that is
+    invisible to retrieval because the manifest has no entry, and
+    the next successful run overwrites atomically.)
+    """
+    create_job_folder(job_id)
+    target = _export_path(job_id, format)
+    _atomic_write_bytes(target, payload)
+    return target
+
+
+def read_export_bytes(job_id: str, format: str) -> bytes:
+    """Read the export file from disk as raw bytes.
+
+    Raises :class:`JobNotFound` if the file is absent.
+    """
+    path = _export_path(job_id, format)
+    if not path.exists():
+        raise JobNotFound(
+            f"export {format!r} not found for job {job_id}"
+        )
+    return path.read_bytes()
+
+
+def export_path_for(job_id: str, format: str) -> Path:
+    """Return the on-disk path the export *would* live at.
+
+    Helper for tests that need to inspect mtime / existence without
+    triggering a read. Does not check existence.
+    """
+    return _export_path(job_id, format)
+
+
+def upsert_export_entry(
+    job_id: str, entry: dict[str, Any],
+) -> dict[str, Any]:
+    """Insert or replace one entry in the manifest's ``exports[]``.
+
+    Behaviour:
+
+    * If ``document_manifest.json`` is missing, raises
+      :class:`JobNotFound` — the caller must assemble the brief
+      first.
+    * If the manifest's ``schema_version`` is 1, the manifest is
+      migrated to 2 by adding ``exports: []`` (the assembler has
+      already been bumped to write v2 on every fresh assembly; this
+      branch protects against a half-migrated job folder produced
+      by an older build).
+    * If an entry already exists with the same ``format``, the new
+      entry replaces it and inherits ``regeneration_count = old + 1``.
+      The provided ``entry`` should pass ``regeneration_count`` as
+      0 — this helper will overwrite it with the incremented value.
+    * Otherwise the new entry is appended with
+      ``regeneration_count = 0``.
+
+    Returns the final entry that was written (so the caller can
+    surface ``regeneration_count`` in the HTTP response).
+
+    The write is atomic via :func:`_atomic_write_json`.
+    """
+    if "format" not in entry:
+        raise ValueError("export entry must carry a 'format' key")
+
+    manifest = read_document_manifest(job_id)
+
+    # Schema migration — additive.
+    if int(manifest.get("schema_version", 1)) < 2:
+        manifest["schema_version"] = 2
+    if "exports" not in manifest or not isinstance(manifest.get("exports"), list):
+        manifest["exports"] = []
+
+    fmt = entry["format"]
+    exports = list(manifest["exports"])
+    existing_index: int | None = None
+    existing: dict[str, Any] | None = None
+    for i, candidate in enumerate(exports):
+        if isinstance(candidate, dict) and candidate.get("format") == fmt:
+            existing_index = i
+            existing = candidate
+            break
+
+    final_entry = dict(entry)
+    if existing is not None:
+        prior_count = int(existing.get("regeneration_count", 0))
+        final_entry["regeneration_count"] = prior_count + 1
+        exports[existing_index] = final_entry  # type: ignore[index]
+    else:
+        final_entry["regeneration_count"] = 0
+        exports.append(final_entry)
+
+    manifest["exports"] = exports
+    write_document_manifest(job_id, manifest)
+    return final_entry
+
+
 def read_document_manifest(job_id: str) -> dict[str, Any]:
     """Read the assembly manifest from disk as a plain ``dict``.
 

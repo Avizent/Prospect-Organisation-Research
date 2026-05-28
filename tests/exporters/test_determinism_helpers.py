@@ -14,8 +14,6 @@ import io
 import zipfile
 from datetime import datetime, timezone
 
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -152,15 +150,64 @@ def test_canonicalize_zip_uses_deflate_compression() -> None:
 
 
 # ---------------------------------------------------------------------------
-# strip_pdf_dates is reserved for Step 36
+# strip_pdf_dates — landed in Step 36 alongside the PDF renderer.
+# Smoke-test it here against a tiny WeasyPrint PDF so the helper's
+# contract (no /CreationDate, no /ModDate, fixed /Producer, no /Metadata
+# stream) is enforced even if the renderer file is deleted.
 # ---------------------------------------------------------------------------
 
 
-def test_strip_pdf_dates_raises_not_implemented_in_step_35() -> None:
-    """Step 35 reserves the surface; the renderer (Step 36) provides
-    the real implementation. Calling it now must raise loudly so an
-    accidental wire-up does not produce an under-determined PDF."""
+def _tiny_pdf_bytes() -> bytes:
+    """Build the smallest reasonable PDF for the determinism smoke test.
+
+    We use WeasyPrint to produce one because constructing a valid PDF
+    by hand is awkward, and the helper only operates on real PDFs.
+    """
+    import weasyprint  # noqa: WPS433 — heavy native dep, lazy import.
+    return weasyprint.HTML(string="<html><body>hi</body></html>").write_pdf()
+
+
+def test_strip_pdf_dates_removes_creation_and_mod_date() -> None:
+    import pikepdf
+
     from backend.exporters.determinism import strip_pdf_dates
 
-    with pytest.raises(NotImplementedError):
-        strip_pdf_dates(b"%PDF-1.7\n")
+    raw = _tiny_pdf_bytes()
+    stripped = strip_pdf_dates(raw, id_seed=b"\x01" * 16)
+    with pikepdf.open(io.BytesIO(stripped)) as pdf:
+        info = pdf.docinfo
+        assert "/CreationDate" not in info
+        assert "/ModDate" not in info
+
+
+def test_strip_pdf_dates_pins_producer_and_creator() -> None:
+    import pikepdf
+
+    from backend.exporters.determinism import PRODUCER_STRING, strip_pdf_dates
+
+    stripped = strip_pdf_dates(_tiny_pdf_bytes(), id_seed=b"\x02" * 16)
+    with pikepdf.open(io.BytesIO(stripped)) as pdf:
+        assert str(pdf.docinfo["/Producer"]) == PRODUCER_STRING
+        assert str(pdf.docinfo["/Creator"]) == PRODUCER_STRING
+
+
+def test_strip_pdf_dates_drops_xmp_metadata_stream() -> None:
+    import pikepdf
+
+    from backend.exporters.determinism import strip_pdf_dates
+
+    stripped = strip_pdf_dates(_tiny_pdf_bytes(), id_seed=b"\x03" * 16)
+    with pikepdf.open(io.BytesIO(stripped)) as pdf:
+        assert "/Metadata" not in pdf.Root
+
+
+def test_strip_pdf_dates_is_deterministic_across_runs() -> None:
+    """Two calls with the same input + same ``id_seed`` produce
+    byte-equal output. This is the renderer's central guarantee."""
+    from backend.exporters.determinism import strip_pdf_dates
+
+    raw = _tiny_pdf_bytes()
+    seed = b"\xaa" * 16
+    out_a = strip_pdf_dates(raw, id_seed=seed)
+    out_b = strip_pdf_dates(raw, id_seed=seed)
+    assert out_a == out_b

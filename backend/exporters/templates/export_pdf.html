@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ company_name }} — Prospect Brief</title>
+</head>
+<body>
+
+<header class="brand-header">
+  <img class="brand-logo" src="data:image/png;base64,{{ ans_logo_b64 }}" alt="ANS">
+  {% if prospect_logo_b64 %}
+  <img class="prospect-logo" src="data:image/png;base64,{{ prospect_logo_b64 }}" alt="">
+  {% endif %}
+  <div class="brand-title">
+    <h1>{{ company_name }}</h1>
+    <p class="brand-subtitle">Prospect Brief</p>
+  </div>
+</header>
+
+<div class="watermark">INTERNAL DRAFT</div>
+
+<main class="brief-body">
+{{ body_html | safe }}
+</main>
+
+<footer class="brief-footer">
+  <p>INTERNAL DRAFT — not for external distribution.</p>
+</footer>
+
+</body>
+</html>

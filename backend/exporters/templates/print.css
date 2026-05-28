@@ -1,0 +1,185 @@
+/* Step 36 — print stylesheet for the deterministic PDF export.
+ *
+ * Determinism notes:
+ *  - Only ``DejaVu Sans`` is referenced as a font-family. WeasyPrint
+ *    ships this face on every install we support, so the rendered
+ *    PDF embeds the same glyph subsets regardless of host OS.
+ *  - All sizes are fixed in mm/pt; no viewport-dependent units.
+ *  - INTERNAL DRAFT watermark is hard rule #7 (see CLAUDE.md) and
+ *    appears as a fixed-position page overlay so it survives a
+ *    long brief that paginates over many pages.
+ */
+
+@page {
+  size: A4;
+  margin: 22mm 18mm 22mm 18mm;
+}
+
+* {
+  font-family: "DejaVu Sans", sans-serif;
+  box-sizing: border-box;
+}
+
+body {
+  color: #1a1a1a;
+  font-size: 10pt;
+  line-height: 1.45;
+  margin: 0;
+}
+
+/* -------------------------------------------------------------- */
+/* Brand header */
+/* -------------------------------------------------------------- */
+
+.brand-header {
+  display: flex;
+  align-items: center;
+  border-bottom: 1pt solid #0066CC;
+  padding-bottom: 8mm;
+  margin-bottom: 8mm;
+}
+
+.brand-logo {
+  height: 14mm;
+  width: auto;
+  margin-right: 8mm;
+}
+
+.prospect-logo {
+  height: 12mm;
+  width: auto;
+  margin-right: 8mm;
+}
+
+.brand-title h1 {
+  font-size: 18pt;
+  color: #0066CC;
+  margin: 0 0 1mm 0;
+  font-weight: 700;
+}
+
+.brand-subtitle {
+  font-size: 10pt;
+  color: #555555;
+  margin: 0;
+}
+
+/* -------------------------------------------------------------- */
+/* INTERNAL DRAFT watermark */
+/* -------------------------------------------------------------- */
+
+.watermark {
+  position: fixed;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-30deg);
+  font-size: 60pt;
+  color: rgba(204, 0, 0, 0.10);
+  font-weight: 700;
+  letter-spacing: 4pt;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+/* -------------------------------------------------------------- */
+/* Body content */
+/* -------------------------------------------------------------- */
+
+.brief-body h1 {
+  font-size: 16pt;
+  color: #0066CC;
+  margin-top: 8mm;
+  margin-bottom: 3mm;
+  page-break-after: avoid;
+}
+
+.brief-body h2 {
+  font-size: 13pt;
+  color: #0066CC;
+  margin-top: 6mm;
+  margin-bottom: 2mm;
+  page-break-after: avoid;
+}
+
+.brief-body h3 {
+  font-size: 11pt;
+  color: #333333;
+  margin-top: 5mm;
+  margin-bottom: 2mm;
+  page-break-after: avoid;
+}
+
+.brief-body p {
+  margin: 0 0 2mm 0;
+}
+
+.brief-body ul,
+.brief-body ol {
+  margin: 0 0 3mm 6mm;
+  padding: 0;
+}
+
+.brief-body li {
+  margin-bottom: 1mm;
+}
+
+.brief-body code {
+  font-family: "DejaVu Sans Mono", monospace;
+  background: #f4f4f4;
+  padding: 0 1mm;
+  font-size: 9pt;
+}
+
+.brief-body pre {
+  background: #f4f4f4;
+  padding: 3mm;
+  font-size: 9pt;
+  white-space: pre-wrap;
+}
+
+.brief-body pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.brief-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 3mm 0;
+  font-size: 9pt;
+}
+
+.brief-body th,
+.brief-body td {
+  border: 0.4pt solid #888888;
+  padding: 1.5mm 2mm;
+  text-align: left;
+  vertical-align: top;
+}
+
+.brief-body th {
+  background: #f0f4fa;
+  color: #0066CC;
+  font-weight: 700;
+}
+
+.brief-body blockquote {
+  border-left: 2pt solid #0066CC;
+  margin: 3mm 0;
+  padding: 1mm 4mm;
+  color: #444444;
+  font-style: italic;
+}
+
+/* -------------------------------------------------------------- */
+/* Footer */
+/* -------------------------------------------------------------- */
+
+.brief-footer {
+  margin-top: 10mm;
+  padding-top: 4mm;
+  border-top: 0.4pt solid #888888;
+  font-size: 8pt;
+  color: #666666;
+  text-align: center;
+}

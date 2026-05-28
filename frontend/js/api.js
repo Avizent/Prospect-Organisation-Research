@@ -127,6 +127,22 @@ const api = {
       `/api/jobs/${encodeURIComponent(id)}/brief/assemble`,
       { returnStatus: true }),
 
+  // Step 36: deterministic PDF export. POST renders a byte-equal PDF
+  // from the on-disk ``prospect_brief.md`` and writes it to
+  // ``exports/prospect_brief.pdf``; the manifest's ``exports[]`` array
+  // gains (or replaces) a single ``format: "pdf"`` entry. Returns
+  // ``{ status, body }`` because the manifest viewer surfaces 201
+  // ("PDF generated") vs 200 ("PDF re-generated") in operator copy.
+  //
+  // GET retrieval lives at the sibling path ``/exports/pdf`` and is
+  // exposed as a plain URL (not an api.js wrapper) — the download
+  // button is an ``<a href>`` so the browser streams the bytes
+  // directly without going through fetch + Blob.
+  runPdfExport: (id) =>
+    request("POST",
+      `/api/jobs/${encodeURIComponent(id)}/export/pdf`,
+      { returnStatus: true }),
+
   // Stage 2 run — POST starts the orchestrator on an approved job.
   // The route returns 503 unless the opt-in fake runtime is wired
   // (ANS_ENABLE_FAKE_STAGE2_RUNTIME=1). The frontend treats 503 as a

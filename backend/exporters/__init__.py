@@ -75,8 +75,8 @@ from __future__ import annotations
 #
 # Both follow semver. Bumping either is a deliberate determinism re-baseline.
 
-EXPORTER_VERSION: str = "0.1.0"
-TEMPLATE_VERSION: str = "0.0.0"
+EXPORTER_VERSION: str = "0.2.0"
+TEMPLATE_VERSION: str = "0.1.0"
 
 
 __all__ = [

@@ -44,6 +44,7 @@ from backend.jobs.fake_stage2_runtime import (
     install_fake_stage2_runtime,
 )
 from backend.jobs.assembly_routes import router as assembly_router
+from backend.jobs.export_routes import router as export_routes_router
 from backend.jobs.routes import router as jobs_router
 from backend.jobs.stage2_routes import router as stage2_router
 
@@ -75,6 +76,7 @@ app.include_router(admin_router, prefix="/admin")
 app.include_router(jobs_router, prefix="/api/jobs")
 app.include_router(stage2_router, prefix="/api/jobs")
 app.include_router(assembly_router, prefix="/api/jobs")
+app.include_router(export_routes_router, prefix="/api/jobs")
 
 
 # ---------------------------------------------------------------------------

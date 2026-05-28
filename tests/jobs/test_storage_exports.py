@@ -1,0 +1,273 @@
+"""Tests for the Step 36 export storage helpers.
+
+The new helpers under :mod:`backend.jobs.storage`:
+
+  - :func:`write_export` / :func:`read_export_bytes` /
+    :func:`export_path_for` — file-level I/O for the new
+    ``exports/{filename}`` artefacts.
+  - :func:`upsert_export_entry` — manifest-level upsert that
+    maintains the v2 ``exports[]`` invariants:
+
+      * one entry per ``format`` token;
+      * ``regeneration_count`` increments on replace, starts at 0 on
+        insert;
+      * v1 manifests are silently migrated to v2 by adding
+        ``exports: []`` (the assembler already writes v2 on every
+        fresh run; this branch protects against a half-migrated
+        folder produced by an older build).
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+
+import pytest
+
+from backend.jobs.storage import (
+    JobNotFound,
+    export_path_for,
+    read_document_manifest,
+    read_export_bytes,
+    upsert_export_entry,
+    write_document_manifest,
+    write_export,
+)
+
+
+def _new_job_id() -> str:
+    return str(uuid.uuid4())
+
+
+_V1_MANIFEST: dict = {
+    "schema_version": 1,
+    "job_id": "00000000-0000-4000-8000-000000000000",
+    "company_name": "Acme Ltd",
+    "company_url": "https://acme.example.com/",
+    "generated_at": "2026-05-28T00:00:00Z",
+    "markdown_filename": "prospect_brief.md",
+    "markdown_sha256": "a" * 64,
+    "markdown_byte_length": 1234,
+    "sections": [],
+    "artefacts": {},
+    "outputs": [
+        {"key": "markdown", "filename": "prospect_brief.md"},
+        {"key": "manifest", "filename": "document_manifest.json"},
+    ],
+    "critic_verdict": None,
+    "warnings": [],
+}
+
+
+def _v2_manifest(job_id: str) -> dict:
+    return {
+        **_V1_MANIFEST,
+        "job_id": job_id,
+        "schema_version": 2,
+        "exports": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# write_export / read_export_bytes
+# ---------------------------------------------------------------------------
+
+
+def test_write_export_writes_under_exports_subfolder(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    path = write_export(job_id, "pdf", b"%PDF-1.7\n")
+    assert path == export_path_for(job_id, "pdf")
+    assert path.parent.name == "exports"
+    assert path.name == "prospect_brief.pdf"
+
+
+def test_write_export_is_atomic(isolated_jobs_root: Path) -> None:
+    """The helper writes via a ``.tmp`` sibling + ``os.replace``;
+    no ``.tmp`` file should remain after a successful call."""
+    job_id = _new_job_id()
+    write_export(job_id, "pdf", b"%PDF-1.7\nfoo")
+    folder = export_path_for(job_id, "pdf").parent
+    leftovers = [p for p in folder.iterdir() if p.suffix == ".tmp"]
+    assert leftovers == []
+
+
+def test_write_export_overwrites_existing_file(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    write_export(job_id, "pdf", b"first")
+    write_export(job_id, "pdf", b"second")
+    assert read_export_bytes(job_id, "pdf") == b"second"
+
+
+def test_read_export_bytes_round_trips(isolated_jobs_root: Path) -> None:
+    job_id = _new_job_id()
+    payload = b"%PDF-1.7\nhello\n%%EOF\n"
+    write_export(job_id, "pdf", payload)
+    assert read_export_bytes(job_id, "pdf") == payload
+
+
+def test_read_export_bytes_raises_when_absent(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    with pytest.raises(JobNotFound):
+        read_export_bytes(job_id, "pdf")
+
+
+def test_write_export_rejects_unknown_format(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    with pytest.raises(ValueError):
+        write_export(job_id, "docx", b"x")  # not in Step 36 set
+
+
+# ---------------------------------------------------------------------------
+# upsert_export_entry
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_inserts_entry_on_first_call(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    write_document_manifest(job_id, _v2_manifest(job_id))
+    entry = {
+        "format": "pdf",
+        "filename": "prospect_brief.pdf",
+        "byte_length": 1024,
+        "sha256": "f" * 64,
+        "source_markdown_sha256": "a" * 64,
+        "generated_at": "2026-05-28T00:00:00Z",
+        "exporter_version": "0.2.0",
+        "template_version": "0.1.0",
+        "renderer": {"name": "weasyprint", "version": "68.1"},
+        "markdown_renderer": {"name": "markdown", "version": "3.10.2"},
+        "regeneration_count": 0,
+        "warnings": [],
+    }
+    final = upsert_export_entry(job_id, entry)
+    assert final["regeneration_count"] == 0
+
+    manifest = read_document_manifest(job_id)
+    assert len(manifest["exports"]) == 1
+    assert manifest["exports"][0]["format"] == "pdf"
+    assert manifest["exports"][0]["sha256"] == "f" * 64
+
+
+def test_upsert_replaces_entry_and_increments_regeneration_count(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    write_document_manifest(job_id, _v2_manifest(job_id))
+    base = {
+        "format": "pdf",
+        "filename": "prospect_brief.pdf",
+        "byte_length": 1024,
+        "sha256": "f" * 64,
+        "source_markdown_sha256": "a" * 64,
+        "generated_at": "2026-05-28T00:00:00Z",
+        "exporter_version": "0.2.0",
+        "template_version": "0.1.0",
+        "renderer": {"name": "weasyprint", "version": "68.1"},
+        "markdown_renderer": {"name": "markdown", "version": "3.10.2"},
+        "regeneration_count": 0,
+        "warnings": [],
+    }
+    upsert_export_entry(job_id, base)
+    second = dict(base)
+    second["sha256"] = "e" * 64
+    final = upsert_export_entry(job_id, second)
+    assert final["regeneration_count"] == 1
+
+    # Still exactly one entry — the upsert replaces, never appends.
+    manifest = read_document_manifest(job_id)
+    assert len(manifest["exports"]) == 1
+    assert manifest["exports"][0]["sha256"] == "e" * 64
+    assert manifest["exports"][0]["regeneration_count"] == 1
+
+
+def test_upsert_migrates_v1_manifest_to_v2(
+    isolated_jobs_root: Path,
+) -> None:
+    """A pre-Step-35 manifest on disk has ``schema_version=1`` and no
+    ``exports`` key. The upsert helper migrates additively."""
+    job_id = _new_job_id()
+    write_document_manifest(job_id, {**_V1_MANIFEST, "job_id": job_id})
+    entry = {
+        "format": "pdf",
+        "filename": "prospect_brief.pdf",
+        "byte_length": 1024,
+        "sha256": "0" * 64,
+        "source_markdown_sha256": "a" * 64,
+        "generated_at": "2026-05-28T00:00:00Z",
+        "exporter_version": "0.2.0",
+        "template_version": "0.1.0",
+        "renderer": {"name": "weasyprint", "version": "68.1"},
+        "markdown_renderer": {"name": "markdown", "version": "3.10.2"},
+        "regeneration_count": 0,
+        "warnings": [],
+    }
+    upsert_export_entry(job_id, entry)
+
+    manifest = read_document_manifest(job_id)
+    assert manifest["schema_version"] == 2
+    assert "exports" in manifest
+    assert len(manifest["exports"]) == 1
+
+
+def test_upsert_preserves_all_non_exports_manifest_fields(
+    isolated_jobs_root: Path,
+) -> None:
+    """The upsert helper must never lose pre-existing manifest fields."""
+    job_id = _new_job_id()
+    original = _v2_manifest(job_id)
+    original["company_name"] = "Acme Different Ltd"
+    original["markdown_sha256"] = "b" * 64
+    original["sections"] = [{"key": "intro", "byte_length": 42}]
+    original["warnings"] = ["a warning"]
+    write_document_manifest(job_id, original)
+
+    entry = {
+        "format": "pdf",
+        "filename": "prospect_brief.pdf",
+        "byte_length": 1024,
+        "sha256": "0" * 64,
+        "source_markdown_sha256": "b" * 64,
+        "generated_at": "2026-05-28T00:00:00Z",
+        "exporter_version": "0.2.0",
+        "template_version": "0.1.0",
+        "renderer": {"name": "weasyprint", "version": "68.1"},
+        "markdown_renderer": {"name": "markdown", "version": "3.10.2"},
+        "regeneration_count": 0,
+        "warnings": [],
+    }
+    upsert_export_entry(job_id, entry)
+
+    final = read_document_manifest(job_id)
+    assert final["company_name"] == "Acme Different Ltd"
+    assert final["markdown_sha256"] == "b" * 64
+    assert final["sections"] == [{"key": "intro", "byte_length": 42}]
+    assert final["warnings"] == ["a warning"]
+
+
+def test_upsert_raises_when_manifest_missing(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    entry = {"format": "pdf"}
+    with pytest.raises(JobNotFound):
+        upsert_export_entry(job_id, entry)
+
+
+def test_upsert_rejects_entry_without_format(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    write_document_manifest(job_id, _v2_manifest(job_id))
+    with pytest.raises(ValueError):
+        upsert_export_entry(job_id, {"filename": "x.pdf"})

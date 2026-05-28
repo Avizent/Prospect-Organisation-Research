@@ -51,6 +51,7 @@ _REQUIRED_METHODS = (
     "runStage2",
     "assembleBrief",
     "getDocumentManifest",
+    "runPdfExport",
 )
 
 
@@ -94,6 +95,8 @@ _REQUIRED_PATHS = (
     "/stage2/run",
     "/brief/assemble",
     "/manifest",
+    "/export/pdf",
+    "/exports/pdf",
 )
 
 
@@ -119,6 +122,7 @@ def test_uses_post_for_state_changing_routes(src: str) -> None:
         "failRegeneration",
         "runStage2",
         "assembleBrief",
+        "runPdfExport",
     ):
         m = re.search(
             rf'{method}:.*request\("POST"', src, flags=re.DOTALL
