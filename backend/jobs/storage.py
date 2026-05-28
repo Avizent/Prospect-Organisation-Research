@@ -726,6 +726,83 @@ def read_critic_report(job_id: str) -> Stage2CriticReport:
 
 
 # ---------------------------------------------------------------------------
+# prospect_brief.md / document_manifest.json — Step 29 assembly outputs
+# ---------------------------------------------------------------------------
+#
+# Step 29 adds two terminal artefacts produced by
+# :mod:`backend.assembly.markdown`:
+#
+# * ``prospect_brief.md``      — the human-readable Markdown rollup of
+#                                the briefing + Stage 2 artefacts.
+# * ``document_manifest.json`` — provenance/integrity record for the
+#                                ``.md`` and its input artefacts.
+#
+# Both are *outputs*: nothing in the codebase reads them back, so there
+# is no corresponding ``read_*`` helper. The write helpers reuse the
+# same atomic-rename pattern as every other artefact in this module
+# (``_atomic_write_json`` for JSON, the new ``_atomic_write_text`` for
+# the ``.md``). Neither writer touches state.json, the job status, or
+# any transition: assembly is a side-effect-free *render* over existing
+# on-disk artefacts (see ``backend/assembly/markdown.py``).
+
+def _atomic_write_text(target: Path, text: str) -> None:
+    """Write ``text`` to ``target`` atomically as UTF-8.
+
+    Same write-tmp-then-``os.replace`` pattern as
+    :func:`_atomic_write_json`: serialise to bytes, write to
+    ``target.tmp``, ``os.replace`` over ``target``. On POSIX the rename
+    is atomic; the reader sees either the old file or the new one,
+    never a partial one. The tmp file lives in the same directory as
+    ``target`` so the rename is a same-filesystem operation.
+
+    The text is written verbatim (no normalisation, no BOM). Callers
+    are expected to terminate the string with a single trailing
+    newline if they want one — the helper does not add or strip one.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, target)
+
+
+def _prospect_brief_md_path(job_id: str) -> Path:
+    return job_folder(job_id) / "prospect_brief.md"
+
+
+def _document_manifest_path(job_id: str) -> Path:
+    return job_folder(job_id) / "document_manifest.json"
+
+
+def write_prospect_brief_markdown(job_id: str, text: str) -> Path:
+    """Atomically write the assembled prospect brief Markdown to disk.
+
+    Returns the path written. Terminal artefact: nothing reads this
+    back. Folder is created if absent (mirrors the other writers'
+    defence-in-depth against a missing folder on a rare error path).
+    """
+    create_job_folder(job_id)
+    target = _prospect_brief_md_path(job_id)
+    _atomic_write_text(target, text)
+    return target
+
+
+def write_document_manifest(
+    job_id: str, manifest: dict[str, Any]
+) -> Path:
+    """Atomically write the assembly manifest to disk as JSON.
+
+    Returns the path written. The manifest is a plain ``dict`` (not a
+    Pydantic model) — the assembler defines its shape; this helper
+    just persists it. Same JSON-formatting policy as every other
+    artefact (``indent=2, sort_keys=False, ensure_ascii=False``).
+    """
+    create_job_folder(job_id)
+    target = _document_manifest_path(job_id)
+    _atomic_write_json(target, manifest)
+    return target
+
+
+# ---------------------------------------------------------------------------
 # Datetime helpers
 # ---------------------------------------------------------------------------
 
