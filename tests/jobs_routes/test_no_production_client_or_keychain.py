@@ -125,10 +125,11 @@ def test_routes_module_is_importable_in_isolation() -> None:
     # Step 21 bumped this from 12 → 17 by adding 5 read-only Stage 2
     # artefact GET routes (product-mapping, benefits, faq, objections,
     # critic-report). Step 31 bumps it to 18 by adding the read-only
-    # Markdown viewer feed (``/brief/markdown``). Any future change to
-    # this number is a deliberate surface change that must be approved
-    # per-step.
-    assert len(module.router.routes) == 18
+    # Markdown viewer feed (``/brief/markdown``). Step 34 bumps it to
+    # 19 by adding the read-only document manifest feed
+    # (``/manifest``). Any future change to this number is a deliberate
+    # surface change that must be approved per-step.
+    assert len(module.router.routes) == 19
 
 
 def test_no_cloud_client_attribute_access(routes_source: str) -> None:

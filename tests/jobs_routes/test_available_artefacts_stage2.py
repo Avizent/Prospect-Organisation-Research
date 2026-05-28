@@ -54,6 +54,7 @@ _EXPECTED_BOOLEAN_KEYS = {
     "briefing",
     "contacts",
     "critic_report",
+    "document_manifest",
     "faq",
     "needs_assessment",
     "objections",
@@ -148,11 +149,15 @@ def test_extra_unexpected_field_rejected_by_response_model(
     created_job: str,
 ) -> None:
     """The ``AvailableArtefacts`` model uses ``extra='forbid'``; a
-    future change that accidentally adds an eleventh field would be
+    future change that accidentally adds a twelfth field would be
     caught at response-model validation rather than silently appearing
     on the wire. We assert the negative by checking the shape contains
-    exactly the ten expected keys — no more, no less."""
+    exactly the eleven expected keys — no more, no less.
+
+    Step 34 bumped the key count from ten to eleven by adding
+    ``document_manifest`` alongside ``prospect_brief``.
+    """
     r = authed_client.get(f"/api/jobs/{created_job}")
     arts = r.json()["available_artefacts"]
-    assert len(arts) == 10
+    assert len(arts) == 11
     assert set(arts.keys()) == _EXPECTED_BOOLEAN_KEYS

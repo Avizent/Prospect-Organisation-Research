@@ -106,6 +106,7 @@ from backend.jobs.storage import (
     write_briefing,
     write_contacts,
     write_critic_report,
+    write_document_manifest,
     write_dossier,
     write_faq,
     write_needs_assessment,
@@ -789,10 +790,33 @@ def job_with_all_stage2_artefacts(
     write_objections(job_id, sample_objections)
     write_critic_report(job_id, sample_critic_report)
     # Step 31: also seed the assembly output so the "all booleans True"
-    # happy-path asserts the full ten-key shape rather than nine. The
+    # happy-path asserts the full eleven-key shape rather than nine. The
     # Markdown body's content is irrelevant to the route tests; the
     # presence of the file is what flips ``prospect_brief`` to ``True``.
     write_prospect_brief_markdown(job_id, "# fixture brief\n")
+    # Step 34: seed a minimal manifest companion so the
+    # ``document_manifest`` boolean also flips True in the all-artefacts
+    # happy path. The shape mirrors the documented Step 29 manifest;
+    # tests that exercise the manifest body shape use the real assembler
+    # instead.
+    write_document_manifest(job_id, {
+        "schema_version": 1,
+        "job_id": job_id,
+        "company_name": _COMPANY_NAME,
+        "company_url": _COMPANY_URL,
+        "generated_at": "2026-05-28T00:00:00Z",
+        "markdown_filename": "prospect_brief.md",
+        "markdown_sha256": "0" * 64,
+        "markdown_byte_length": 16,
+        "sections": [],
+        "artefacts": {},
+        "outputs": [
+            {"key": "markdown", "filename": "prospect_brief.md"},
+            {"key": "manifest", "filename": "document_manifest.json"},
+        ],
+        "critic_verdict": None,
+        "warnings": [],
+    })
     return job_id
 
 

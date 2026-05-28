@@ -824,6 +824,40 @@ def write_document_manifest(
     return target
 
 
+def read_document_manifest(job_id: str) -> dict[str, Any]:
+    """Read the assembly manifest from disk as a plain ``dict``.
+
+    Step 34 adds this read helper so the HTTP layer can serve the
+    Step 29 ``document_manifest.json`` to the in-app provenance
+    viewer. The assembler is the only writer; this helper only
+    persists the parse and lets the caller decide what to do with
+    a malformed-on-disk file.
+
+    Raises
+    ------
+    JobNotFound
+        if ``document_manifest.json`` does not exist on disk.
+    ValueError
+        if the ``job_id`` is not a valid UUID (raised by
+        :func:`job_folder`'s validator).
+    json.JSONDecodeError
+        if the file exists but is not valid JSON — the route layer
+        catches this and maps it to ``500 manifest_corrupt``.
+
+    We deliberately do **not** Pydantic-validate the manifest here:
+    the assembler is the single source of truth for its shape, the
+    response envelope passes the dict through verbatim, and the
+    frontend iterates the fields generically, so a typed re-validation
+    at this layer would only invite drift.
+    """
+    path = _document_manifest_path(job_id)
+    if not path.exists():
+        raise JobNotFound(
+            f"document_manifest.json not found for job {job_id}"
+        )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 # ---------------------------------------------------------------------------
 # Datetime helpers
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ GET    /api/jobs/{job_id}/artefacts/faq                   read_faq
 GET    /api/jobs/{job_id}/artefacts/objections            read_objections
 GET    /api/jobs/{job_id}/artefacts/critic-report         read_critic_report
 GET    /api/jobs/{job_id}/brief/markdown                  read_prospect_brief_markdown
+GET    /api/jobs/{job_id}/manifest                        read_document_manifest
 POST   /api/jobs/{job_id}/approval/open                   open_for_editing
 PATCH  /api/jobs/{job_id}/briefing                        apply_briefing_edit
 POST   /api/jobs/{job_id}/approval/approve                approve
@@ -103,6 +104,7 @@ from backend.jobs.storage import (
     read_briefing,
     read_contacts,
     read_critic_report,
+    read_document_manifest,
     read_dossier,
     read_faq,
     read_needs_assessment,
@@ -160,6 +162,17 @@ class AvailableArtefacts(BaseModel):
     The Markdown is a *display* artefact, not a JSON one — the
     inspector treats this boolean specially and links to the in-app
     viewer at ``#/jobs/{id}/brief`` rather than to a JSON URL.
+
+    Provenance artefact: ``document_manifest`` (Step 34) flips ``True``
+    once the assembler has written ``document_manifest.json``. Like
+    ``prospect_brief`` this is a *display* artefact — the inspector
+    links to the in-app provenance viewer at ``#/jobs/{id}/manifest``
+    rather than to a raw JSON URL (a secondary "Open raw JSON" link
+    inside that screen targets the new GET route directly). The two
+    flags are deliberately surfaced separately because the Markdown
+    and the manifest are written by two distinct ``_atomic_write_json``
+    / ``write_prospect_brief_markdown`` calls and can drift on disk in
+    pathological scenarios.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -174,6 +187,7 @@ class AvailableArtefacts(BaseModel):
     objections: bool
     critic_report: bool
     prospect_brief: bool
+    document_manifest: bool
 
 
 class JobStatusResponse(BaseModel):
@@ -355,6 +369,7 @@ def get_job_status(
         objections=(folder / "objections.json").exists(),
         critic_report=(folder / "critic_report.json").exists(),
         prospect_brief=(folder / "prospect_brief.md").exists(),
+        document_manifest=(folder / "document_manifest.json").exists(),
     )
     return JobStatusResponse(
         job_id=snapshot.job_id,
@@ -606,6 +621,82 @@ def get_prospect_brief_markdown(
         # _validate_job_id raised ValueError on a non-UUID job_id.
         raise _http_404(f"job not found: {exc}") from exc
     return ProspectBriefMarkdownResponse(markdown=text)
+
+
+# ---------------------------------------------------------------------------
+# 7c. GET /api/jobs/{job_id}/manifest — Step 34 provenance feed
+# ---------------------------------------------------------------------------
+#
+# Step 34 exposes the Step 29 assembly companion (``document_manifest.json``)
+# to the in-app provenance viewer. Like the ``/brief/markdown`` route above
+# this is strictly read-only: it does NOT trigger assembly, does NOT change
+# job status, does NOT append any transition, and does NOT touch
+# ``state.json``. If ``document_manifest.json`` is absent the response is
+# 404; if the file exists but cannot be parsed as JSON the response is 500
+# with ``detail.reason == "manifest_corrupt"`` (mirroring the corrupt-on-disk
+# pattern used by the other artefact reads).
+#
+# Fence note
+# ----------
+# The route deliberately does NOT import :mod:`backend.assembly` — the
+# manifest is on-disk JSON and the read goes through the storage layer
+# only. The existing static fence in
+# ``tests/jobs_routes/test_no_production_client_or_keychain.py`` continues
+# to apply unchanged; the route-count assertion there bumps from 18 → 19
+# as a deliberate surface change reviewed in Step 34.
+
+class DocumentManifestResponse(BaseModel):
+    """GET /api/jobs/{job_id}/manifest response envelope.
+
+    The Step 29 manifest is a plain ``dict`` with a documented set of
+    keys (``schema_version``, ``job_id``, ``company_name``,
+    ``company_url``, ``generated_at``, ``markdown_filename``,
+    ``markdown_sha256``, ``markdown_byte_length``, ``sections``,
+    ``artefacts``, ``outputs``, ``critic_verdict``, ``warnings``). We
+    pass it through verbatim under the ``manifest`` key — the
+    assembler is the single source of truth for the shape, and
+    re-modelling those fields in a typed Pydantic shape here would
+    only invite drift. ``extra="forbid"`` on the envelope still
+    blocks accidental top-level additions.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    manifest: dict[str, Any]
+
+
+@router.get(
+    "/{job_id}/manifest",
+    response_model=DocumentManifestResponse,
+)
+def get_document_manifest(
+    job_id: str,
+    _username: str = Depends(current_username),
+) -> DocumentManifestResponse:
+    """Return the Step 29 ``document_manifest.json`` as a JSON envelope.
+
+    Error mapping:
+
+    * non-UUID ``job_id``                → 404
+    * file absent (JobNotFound)          → 404
+    * file present but malformed JSON    → 500 with
+      ``detail = {"reason": "manifest_corrupt"}``
+    """
+    try:
+        manifest = read_document_manifest(job_id)
+    except JobNotFound as exc:
+        raise _http_404(str(exc)) from exc
+    except json.JSONDecodeError as exc:
+        log.exception("document_manifest.json corrupt for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"reason": "manifest_corrupt"},
+        ) from exc
+    except ValueError as exc:
+        # _validate_job_id raised ValueError on a non-UUID job_id.
+        # Matched last because JSONDecodeError subclasses ValueError.
+        raise _http_404(f"job not found: {exc}") from exc
+    return DocumentManifestResponse(manifest=manifest)
 
 
 # ---------------------------------------------------------------------------

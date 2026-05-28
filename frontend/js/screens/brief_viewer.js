@@ -104,6 +104,15 @@ export async function render(container, params) {
         href: `#/jobs/${encodeURIComponent(id)}`,
         text: "Back to job status",
       }),
+      // Step 34: surface the manifest viewer as a sibling navigation
+      // link. The link is unconditional — if the manifest is missing
+      // the viewer renders its own empty state rather than letting the
+      // operator hit a dead link from the brief view.
+      el("span", { text: " · " }),
+      el("a", {
+        href: `#/jobs/${encodeURIComponent(id)}/manifest`,
+        text: "View Manifest",
+      }),
     ]),
   ]));
 

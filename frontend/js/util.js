@@ -59,7 +59,7 @@ export function toast(message, { kind = "info", ms = 4000 } = {}) {
 /**
  * Parse a hash like "#/jobs/abc/briefing" into { name, params }.
  *
- * Routes (steps 12 + 31):
+ * Routes (steps 12 + 31 + 34):
  *   #/                      -> { name: "home" }
  *   #/setup                 -> { name: "setup" }
  *   #/login                 -> { name: "login" }
@@ -67,6 +67,7 @@ export function toast(message, { kind = "info", ms = 4000 } = {}) {
  *   #/jobs/<id>             -> { name: "job_status", params: { id } }
  *   #/jobs/<id>/briefing    -> { name: "briefing",   params: { id } }
  *   #/jobs/<id>/brief       -> { name: "brief_viewer", params: { id } }
+ *   #/jobs/<id>/manifest    -> { name: "manifest_viewer", params: { id } }
  */
 export function parseRoute(hash) {
   const raw = (hash || "").replace(/^#/, "");
@@ -86,6 +87,8 @@ export function parseRoute(hash) {
     return { name: "briefing", params: { id: parts[1] } };
   if (parts[0] === "jobs" && parts[2] === "brief" && parts.length === 3)
     return { name: "brief_viewer", params: { id: parts[1] } };
+  if (parts[0] === "jobs" && parts[2] === "manifest" && parts.length === 3)
+    return { name: "manifest_viewer", params: { id: parts[1] } };
   return { name: "not_found", params: { path } };
 }
 

@@ -245,16 +245,32 @@ export async function render(container, params) {
       el("span", { text: name }),
     ]);
     if (present) {
-      // ``prospect_brief`` is the Step 31 Markdown rollup — it is a
-      // *display* artefact, not a JSON one, so the inspector links
-      // into the in-app viewer rather than opening raw JSON. The
-      // other entries (briefing and the eight JSON artefacts)
-      // continue to open JSON in a new tab as before.
+      // ``prospect_brief`` (Step 31) and ``document_manifest`` (Step 34)
+      // are *display* artefacts, not JSON ones, so the inspector links
+      // into in-app viewer screens rather than opening raw JSON. The
+      // other entries (briefing and the eight JSON artefacts) continue
+      // to open JSON in a new tab as before.
       if (name === "prospect_brief") {
         li.appendChild(el("span", { text: " — " }));
         li.appendChild(el("a", {
           href: `#/jobs/${encodeURIComponent(id)}/brief`,
           text: "View Brief",
+        }));
+        // Step 34: when both flags are present, expose the manifest
+        // viewer alongside the brief viewer for symmetry with the
+        // brief-viewer header strip.
+        if (artefacts.document_manifest) {
+          li.appendChild(el("span", { text: " · " }));
+          li.appendChild(el("a", {
+            href: `#/jobs/${encodeURIComponent(id)}/manifest`,
+            text: "View Manifest",
+          }));
+        }
+      } else if (name === "document_manifest") {
+        li.appendChild(el("span", { text: " — " }));
+        li.appendChild(el("a", {
+          href: `#/jobs/${encodeURIComponent(id)}/manifest`,
+          text: "View Manifest",
         }));
       } else {
         const href = name === "briefing"

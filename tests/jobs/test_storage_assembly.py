@@ -34,6 +34,7 @@ import pytest
 
 from backend.jobs.storage import (
     JobNotFound,
+    read_document_manifest,
     read_prospect_brief_markdown,
     write_document_manifest,
     write_prospect_brief_markdown,
@@ -222,3 +223,70 @@ def test_write_document_manifest_uses_two_space_indent(
     ).read_text(encoding="utf-8")
     assert '  "nested"' in raw  # two-space indent at depth 1
     assert '    "inner"' in raw  # four-space indent at depth 2
+
+
+# ---------------------------------------------------------------------------
+# read_document_manifest (Step 34)
+# ---------------------------------------------------------------------------
+
+def test_read_document_manifest_round_trips_to_dict(
+    isolated_jobs_root: Path,
+) -> None:
+    """Round-trip: write → read returns the same dict verbatim."""
+    job_id = _new_job_id()
+    manifest = {
+        "schema_version": 1,
+        "job_id": job_id,
+        "warnings": [],
+        "outputs": [
+            {"key": "markdown", "filename": "prospect_brief.md"},
+        ],
+    }
+    write_document_manifest(job_id, manifest)
+    assert read_document_manifest(job_id) == manifest
+
+
+def test_read_document_manifest_preserves_unicode(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    manifest = {"company_name": "Société Générale"}
+    write_document_manifest(job_id, manifest)
+    rebuilt = read_document_manifest(job_id)
+    assert rebuilt["company_name"] == "Société Générale"
+
+
+def test_read_document_manifest_missing_file_raises_job_not_found(
+    isolated_jobs_root: Path,
+) -> None:
+    """Mirrors the other read helpers' contract: missing → JobNotFound.
+
+    The route layer keys off this exception to return HTTP 404.
+    """
+    job_id = _new_job_id()
+    with pytest.raises(JobNotFound):
+        read_document_manifest(job_id)
+
+
+def test_read_document_manifest_rejects_non_uuid_job_id(
+    isolated_jobs_root: Path,
+) -> None:
+    """``_validate_job_id`` raises ValueError on non-UUID ids — same
+    contract as the other ``read_*`` helpers, which the route layer
+    relies on to map to HTTP 404."""
+    with pytest.raises(ValueError):
+        read_document_manifest("not-a-uuid")
+
+
+def test_read_document_manifest_raises_json_decode_error_for_corrupt_file(
+    isolated_jobs_root: Path,
+) -> None:
+    """Malformed JSON surfaces as ``JSONDecodeError`` — the route layer
+    keys off this exception to return HTTP 500 ``manifest_corrupt``."""
+    job_id = _new_job_id()
+    # Create the folder via a successful write, then overwrite with garbage.
+    write_document_manifest(job_id, {"schema_version": 1})
+    path = isolated_jobs_root / job_id / "document_manifest.json"
+    path.write_text("{not valid", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        read_document_manifest(job_id)

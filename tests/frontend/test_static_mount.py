@@ -56,6 +56,7 @@ def test_serves_screen_modules(client: TestClient) -> None:
         "job_status",
         "briefing",
         "brief_viewer",
+        "manifest_viewer",
     ):
         r = client.get(f"/js/screens/{name}.js")
         assert r.status_code == 200, (name, r.text)

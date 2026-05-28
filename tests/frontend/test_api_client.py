@@ -50,6 +50,7 @@ _REQUIRED_METHODS = (
     "failRegeneration",
     "runStage2",
     "assembleBrief",
+    "getDocumentManifest",
 )
 
 
@@ -92,6 +93,7 @@ _REQUIRED_PATHS = (
     "/approval/regenerate/fail",
     "/stage2/run",
     "/brief/assemble",
+    "/manifest",
 )
 
 

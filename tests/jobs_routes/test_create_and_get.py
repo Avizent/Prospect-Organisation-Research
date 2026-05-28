@@ -131,6 +131,7 @@ def test_get_artefact_flags_track_existence(
         "objections": False,
         "critic_report": False,
         "prospect_brief": False,
+        "document_manifest": False,
     }
 
 

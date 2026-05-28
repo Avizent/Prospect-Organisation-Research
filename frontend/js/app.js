@@ -9,6 +9,8 @@
  *   #/jobs/<id>             -> job status
  *   #/jobs/<id>/briefing    -> briefing inspector / approval gate
  *   #/jobs/<id>/brief       -> read-only Markdown brief viewer (step 31)
+ *   #/jobs/<id>/manifest    -> read-only document manifest / provenance
+ *                              viewer (step 34)
  *
  * The bootstrap sequence on every navigation:
  *   1. If the app hasn't been set up, force the user to #/setup.
@@ -27,6 +29,7 @@ import { render as renderNewJob } from "./screens/new_job.js";
 import { render as renderJobStatus } from "./screens/job_status.js";
 import { render as renderBriefing } from "./screens/briefing.js";
 import { render as renderBriefViewer } from "./screens/brief_viewer.js";
+import { render as renderManifestViewer } from "./screens/manifest_viewer.js";
 
 const PUBLIC_ROUTES = new Set(["setup", "login"]);
 
@@ -115,6 +118,9 @@ async function dispatch() {
       return;
     case "brief_viewer":
       await renderBriefViewer(main, route.params);
+      return;
+    case "manifest_viewer":
+      await renderManifestViewer(main, route.params);
       return;
     case "not_found":
     default:

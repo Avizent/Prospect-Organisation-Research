@@ -108,6 +108,15 @@ const api = {
     request("GET",
       `/api/jobs/${encodeURIComponent(id)}/brief/markdown`),
 
+  // Step 34: document manifest — read-only provenance feed for the
+  // manifest viewer screen. Returns ``{ manifest: {...} }`` on 200; the
+  // route returns 404 when ``document_manifest.json`` is not yet on
+  // disk and 500 with ``detail.reason == "manifest_corrupt"`` when the
+  // file exists but is unparsable.
+  getDocumentManifest: (id) =>
+    request("GET",
+      `/api/jobs/${encodeURIComponent(id)}/manifest`),
+
   // Step 33: explicit Markdown brief assembly trigger. Returns
   // ``{ status, body }`` because the operator-facing toast copy
   // distinguishes 201 ("Brief assembled") from 200
