@@ -29,6 +29,7 @@ GET    /api/jobs/{job_id}/artefacts/benefits              read_benefits
 GET    /api/jobs/{job_id}/artefacts/faq                   read_faq
 GET    /api/jobs/{job_id}/artefacts/objections            read_objections
 GET    /api/jobs/{job_id}/artefacts/critic-report         read_critic_report
+GET    /api/jobs/{job_id}/brief/markdown                  read_prospect_brief_markdown
 POST   /api/jobs/{job_id}/approval/open                   open_for_editing
 PATCH  /api/jobs/{job_id}/briefing                        apply_briefing_edit
 POST   /api/jobs/{job_id}/approval/approve                approve
@@ -107,6 +108,7 @@ from backend.jobs.storage import (
     read_needs_assessment,
     read_objections,
     read_product_mapping,
+    read_prospect_brief_markdown,
     read_state,
 )
 
@@ -152,6 +154,12 @@ class AvailableArtefacts(BaseModel):
     builds ``/api/jobs/{id}/artefacts/<key-with-hyphens>`` URLs from
     each ``True`` key, so adding a new field here automatically
     surfaces an "open JSON" link once the matching route exists.
+
+    Assembly artefact: ``prospect_brief`` (Step 31) flips ``True`` once
+    :mod:`backend.assembly.markdown` has written ``prospect_brief.md``.
+    The Markdown is a *display* artefact, not a JSON one — the
+    inspector treats this boolean specially and links to the in-app
+    viewer at ``#/jobs/{id}/brief`` rather than to a JSON URL.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -165,6 +173,7 @@ class AvailableArtefacts(BaseModel):
     faq: bool
     objections: bool
     critic_report: bool
+    prospect_brief: bool
 
 
 class JobStatusResponse(BaseModel):
@@ -345,6 +354,7 @@ def get_job_status(
         faq=(folder / "faq.json").exists(),
         objections=(folder / "objections.json").exists(),
         critic_report=(folder / "critic_report.json").exists(),
+        prospect_brief=(folder / "prospect_brief.md").exists(),
     )
     return JobStatusResponse(
         job_id=snapshot.job_id,
@@ -533,6 +543,69 @@ def get_critic_report(
         artefact_name="critic_report.json",
         reader=read_critic_report,
     )
+
+
+# ---------------------------------------------------------------------------
+# 7b. GET /api/jobs/{job_id}/brief/markdown — Step 31 viewer feed
+# ---------------------------------------------------------------------------
+#
+# Step 31 exposes the Step 29 assembly output (``prospect_brief.md``) to
+# the in-app viewer. Unlike the JSON artefact routes above, the body is
+# raw UTF-8 Markdown — there is no Pydantic round-trip and no schema
+# validation on the way out. We wrap the text in a small JSON envelope
+# (`{"markdown": "..."}`) so the response keeps the same JSON-everywhere
+# contract as the rest of the API and the frontend's ``request()``
+# helper continues to parse with ``response.json()``.
+#
+# The route is strictly read-only: it does NOT trigger assembly, does
+# NOT change the job status, does NOT append any transition, and does
+# NOT touch ``state.json``. If ``prospect_brief.md`` is absent the
+# response is 404. The static fence in
+# ``tests/jobs_routes/test_no_production_client_or_keychain.py``
+# continues to forbid importing :mod:`backend.assembly` from this
+# module, which is why we route through the storage layer alone.
+
+class ProspectBriefMarkdownResponse(BaseModel):
+    """GET /api/jobs/{job_id}/brief/markdown response envelope.
+
+    The Markdown body is returned verbatim under the ``markdown`` key.
+    A wrapper object (rather than ``text/markdown``) keeps the response
+    inside the project's JSON-everywhere contract and lets future
+    additions (e.g. ``manifest`` provenance) extend the shape without
+    breaking existing clients.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    markdown: str
+
+
+@router.get(
+    "/{job_id}/brief/markdown",
+    response_model=ProspectBriefMarkdownResponse,
+)
+def get_prospect_brief_markdown(
+    job_id: str,
+    _username: str = Depends(current_username),
+) -> ProspectBriefMarkdownResponse:
+    """Return the assembled ``prospect_brief.md`` as a JSON envelope.
+
+    Error mapping mirrors the other artefact reads:
+
+    * non-UUID ``job_id``        → 404
+    * file absent (JobNotFound)  → 404
+
+    There is no 500 case here: the storage reader returns raw UTF-8
+    bytes without parsing, so there is no corrupt-on-disk path to map.
+    """
+    try:
+        text = read_prospect_brief_markdown(job_id)
+    except JobNotFound as exc:
+        raise _http_404(str(exc)) from exc
+    except ValueError as exc:
+        # _validate_job_id raised ValueError on a non-UUID job_id.
+        raise _http_404(f"job not found: {exc}") from exc
+    return ProspectBriefMarkdownResponse(markdown=text)
 
 
 # ---------------------------------------------------------------------------

@@ -46,7 +46,9 @@ from backend.jobs.storage import (
 
 
 # Every boolean the response is expected to expose, in alphabetical
-# order for stable comparisons.
+# order for stable comparisons. Step 31 added ``prospect_brief`` to
+# the shape — the new boolean flips True once
+# ``backend.assembly.markdown`` has written ``prospect_brief.md``.
 _EXPECTED_BOOLEAN_KEYS = {
     "benefits",
     "briefing",
@@ -56,6 +58,7 @@ _EXPECTED_BOOLEAN_KEYS = {
     "needs_assessment",
     "objections",
     "product_mapping",
+    "prospect_brief",
     "research_dossier",
 }
 
@@ -145,11 +148,11 @@ def test_extra_unexpected_field_rejected_by_response_model(
     created_job: str,
 ) -> None:
     """The ``AvailableArtefacts`` model uses ``extra='forbid'``; a
-    future change that accidentally adds a tenth field would be
-    caught at response-model validation rather than silently
-    appearing on the wire. We assert the negative by checking the
-    shape contains exactly the nine expected keys — no more, no less."""
+    future change that accidentally adds an eleventh field would be
+    caught at response-model validation rather than silently appearing
+    on the wire. We assert the negative by checking the shape contains
+    exactly the ten expected keys — no more, no less."""
     r = authed_client.get(f"/api/jobs/{created_job}")
     arts = r.json()["available_artefacts"]
-    assert len(arts) == 9
+    assert len(arts) == 10
     assert set(arts.keys()) == _EXPECTED_BOOLEAN_KEYS

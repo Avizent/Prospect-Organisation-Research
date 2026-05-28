@@ -130,6 +130,7 @@ def test_get_artefact_flags_track_existence(
         "faq": False,
         "objections": False,
         "critic_report": False,
+        "prospect_brief": False,
     }
 
 

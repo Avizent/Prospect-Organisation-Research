@@ -25,6 +25,7 @@ import { render as renderSetup } from "./screens/setup.js";
 import { render as renderNewJob } from "./screens/new_job.js";
 import { render as renderJobStatus } from "./screens/job_status.js";
 import { render as renderBriefing } from "./screens/briefing.js";
+import { render as renderBriefViewer } from "./screens/brief_viewer.js";
 
 const PUBLIC_ROUTES = new Set(["setup", "login"]);
 
@@ -110,6 +111,9 @@ async function dispatch() {
       return;
     case "briefing":
       await renderBriefing(main, route.params);
+      return;
+    case "brief_viewer":
+      await renderBriefViewer(main, route.params);
       return;
     case "not_found":
     default:

@@ -139,14 +139,27 @@ export async function render(container, params) {
       el("span", { text: name }),
     ]);
     if (present) {
-      const href = name === "briefing"
-        ? `/api/jobs/${encodeURIComponent(id)}/briefing`
-        : `/api/jobs/${encodeURIComponent(id)}/artefacts/`
-            + name.replace(/_/g, "-");
-      li.appendChild(el("span", { text: " — " }));
-      li.appendChild(el("a", {
-        href, target: "_blank", rel: "noopener noreferrer", text: "open JSON",
-      }));
+      // ``prospect_brief`` is the Step 31 Markdown rollup — it is a
+      // *display* artefact, not a JSON one, so the inspector links
+      // into the in-app viewer rather than opening raw JSON. The
+      // other entries (briefing and the eight JSON artefacts)
+      // continue to open JSON in a new tab as before.
+      if (name === "prospect_brief") {
+        li.appendChild(el("span", { text: " — " }));
+        li.appendChild(el("a", {
+          href: `#/jobs/${encodeURIComponent(id)}/brief`,
+          text: "View Brief",
+        }));
+      } else {
+        const href = name === "briefing"
+          ? `/api/jobs/${encodeURIComponent(id)}/briefing`
+          : `/api/jobs/${encodeURIComponent(id)}/artefacts/`
+              + name.replace(/_/g, "-");
+        li.appendChild(el("span", { text: " — " }));
+        li.appendChild(el("a", {
+          href, target: "_blank", rel: "noopener noreferrer", text: "open JSON",
+        }));
+      }
     }
     artefactList.appendChild(li);
   }

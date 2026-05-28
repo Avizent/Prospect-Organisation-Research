@@ -786,6 +786,28 @@ def write_prospect_brief_markdown(job_id: str, text: str) -> Path:
     return target
 
 
+def read_prospect_brief_markdown(job_id: str) -> str:
+    """Read the assembled prospect brief Markdown as UTF-8 text.
+
+    Step 31 adds this read helper so the HTTP layer can serve the
+    Markdown body to the in-app viewer. The assembler
+    (:mod:`backend.assembly.markdown`) is the only writer; this helper
+    intentionally returns raw text without any rendering or
+    interpretation. The viewer renders the text safely on the client.
+
+    Raises :class:`JobNotFound` if the file is missing. There is no
+    Pydantic round-trip here — Markdown is a display artefact, not a
+    structured payload — so the only failure mode at this layer is the
+    file being absent (which the route maps to HTTP 404).
+    """
+    path = _prospect_brief_md_path(job_id)
+    if not path.exists():
+        raise JobNotFound(
+            f"prospect_brief.md not found for job {job_id}"
+        )
+    return path.read_text(encoding="utf-8")
+
+
 def write_document_manifest(
     job_id: str, manifest: dict[str, Any]
 ) -> Path:

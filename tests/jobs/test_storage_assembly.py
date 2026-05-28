@@ -30,7 +30,11 @@ import json
 import uuid
 from pathlib import Path
 
+import pytest
+
 from backend.jobs.storage import (
+    JobNotFound,
+    read_prospect_brief_markdown,
     write_document_manifest,
     write_prospect_brief_markdown,
 )
@@ -160,6 +164,49 @@ def test_write_document_manifest_uses_unicode_safe_encoding(
     ).read_text(encoding="utf-8")
     assert "Société" in raw
     assert "\\u" not in raw
+
+
+# ---------------------------------------------------------------------------
+# read_prospect_brief_markdown (Step 31)
+# ---------------------------------------------------------------------------
+
+def test_read_prospect_brief_markdown_round_trips(
+    isolated_jobs_root: Path,
+) -> None:
+    """Round-trip: write → read returns the same UTF-8 text verbatim."""
+    job_id = _new_job_id()
+    text = "# Heading\n\nBody paragraph.\n"
+    write_prospect_brief_markdown(job_id, text)
+    assert read_prospect_brief_markdown(job_id) == text
+
+
+def test_read_prospect_brief_markdown_preserves_unicode(
+    isolated_jobs_root: Path,
+) -> None:
+    """Non-ASCII glyphs survive the round-trip without escaping."""
+    job_id = _new_job_id()
+    text = "# Société Générale — résumé\n"
+    write_prospect_brief_markdown(job_id, text)
+    assert read_prospect_brief_markdown(job_id) == text
+
+
+def test_read_prospect_brief_markdown_missing_file_raises_job_not_found(
+    isolated_jobs_root: Path,
+) -> None:
+    """Mirrors the other read helpers' contract: missing → JobNotFound."""
+    job_id = _new_job_id()
+    with pytest.raises(JobNotFound):
+        read_prospect_brief_markdown(job_id)
+
+
+def test_read_prospect_brief_markdown_rejects_non_uuid_job_id(
+    isolated_jobs_root: Path,
+) -> None:
+    """``_validate_job_id`` raises ValueError on non-UUID ids — same
+    contract as the other ``read_*`` helpers, which the route layer
+    relies on to map to HTTP 404."""
+    with pytest.raises(ValueError):
+        read_prospect_brief_markdown("not-a-uuid")
 
 
 def test_write_document_manifest_uses_two_space_indent(

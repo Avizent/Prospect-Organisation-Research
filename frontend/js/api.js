@@ -94,6 +94,13 @@ const api = {
   getBriefing: (id) =>
     request("GET", `/api/jobs/${encodeURIComponent(id)}/briefing`),
 
+  // Step 31: assembled Markdown brief — read-only feed for the viewer.
+  // Returns ``{ markdown: string }`` on 200; the route returns 404
+  // when ``prospect_brief.md`` is not yet on disk.
+  getProspectBriefMarkdown: (id) =>
+    request("GET",
+      `/api/jobs/${encodeURIComponent(id)}/brief/markdown`),
+
   // Stage 2 run — POST starts the orchestrator on an approved job.
   // The route returns 503 unless the opt-in fake runtime is wired
   // (ANS_ENABLE_FAKE_STAGE2_RUNTIME=1). The frontend treats 503 as a

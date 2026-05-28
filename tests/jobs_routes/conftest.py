@@ -111,6 +111,7 @@ from backend.jobs.storage import (
     write_needs_assessment,
     write_objections,
     write_product_mapping,
+    write_prospect_brief_markdown,
 )
 from backend.main import app
 
@@ -787,6 +788,11 @@ def job_with_all_stage2_artefacts(
     write_faq(job_id, sample_faq)
     write_objections(job_id, sample_objections)
     write_critic_report(job_id, sample_critic_report)
+    # Step 31: also seed the assembly output so the "all booleans True"
+    # happy-path asserts the full ten-key shape rather than nine. The
+    # Markdown body's content is irrelevant to the route tests; the
+    # presence of the file is what flips ``prospect_brief`` to ``True``.
+    write_prospect_brief_markdown(job_id, "# fixture brief\n")
     return job_id
 
 
