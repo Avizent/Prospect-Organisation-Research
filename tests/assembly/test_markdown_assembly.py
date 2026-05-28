@@ -507,9 +507,42 @@ def test_assembly_writes_document_manifest_json(
     manifest = json.loads(
         result.manifest_path.read_text(encoding="utf-8")
     )
-    assert manifest["schema_version"] == 1
+    # Step 35: schema bumped 1 → 2 (additive ``exports`` field reserved).
+    assert manifest["schema_version"] == 2
     assert manifest["job_id"] == job_id
     assert manifest["generated_at"] == "2026-05-28T14:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# Step 35 — schema_version 2 reserves an additive ``exports`` field.
+# The assembler must never populate it; that is the export layer's
+# exclusive responsibility (lands in Step 36 for PDF, Step 37 for DOCX).
+# ---------------------------------------------------------------------------
+
+def test_assembly_writes_schema_version_2_with_empty_exports_list(
+    isolated_jobs_root: Path, frozen_now: datetime
+) -> None:
+    """v2 manifests must always carry an ``exports`` key, even when empty.
+
+    Readers (e.g. the manifest viewer at Step 34) branch on the
+    presence of this field to detect a v2-aware writer. An absent
+    field signals "old manifest" and is allowed for backward
+    compatibility — but the assembler itself must always emit v2.
+    """
+    job_id = _new_job_id()
+    _seed_all_artefacts(job_id)
+    result = assemble_job(job_id, now=frozen_now)
+    manifest = json.loads(
+        result.manifest_path.read_text(encoding="utf-8")
+    )
+    assert manifest["schema_version"] == 2
+    assert "exports" in manifest, (
+        "v2 manifests must reserve the additive ``exports`` field"
+    )
+    assert manifest["exports"] == [], (
+        "the assembler must never populate ``exports`` — that is the "
+        "export layer's responsibility (backend.exporters)"
+    )
 
 
 # ---------------------------------------------------------------------------

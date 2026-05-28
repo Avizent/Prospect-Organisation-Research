@@ -918,8 +918,18 @@ def assemble_job(
 
     md_path = write_prospect_brief_markdown(job_id, markdown_text)
 
+    # Step 35: bump schema_version 1 → 2 and reserve the additive ``exports``
+    # field as an empty list. The assembler never populates ``exports`` —
+    # that is exclusively the deterministic export layer's responsibility
+    # (``backend.exporters``). Until Step 36 wires generation in, the list
+    # always serialises as ``[]`` so v2-aware readers can branch on its
+    # presence without crashing.
+    #
+    # Architectural note (carried for future): manifest schema evolution
+    # is likely to become its own concern. No action here, but resist
+    # accumulating schema-versioning logic inside ``markdown.py``.
     manifest: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "job_id": job_id,
         "company_name": briefing.company_name,
         "company_url": str(briefing.company_url),
@@ -935,6 +945,7 @@ def assemble_job(
         ],
         "critic_verdict": verdict.value if verdict is not None else None,
         "warnings": warnings,
+        "exports": [],
     }
 
     manifest_path = write_document_manifest(job_id, manifest)
