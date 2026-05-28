@@ -53,6 +53,7 @@ _REQUIRED_METHODS = (
     "getDocumentManifest",
     "runPdfExport",
     "getExportValidation",
+    "runDocxExport",
 )
 
 
@@ -99,6 +100,8 @@ _REQUIRED_PATHS = (
     "/export/pdf",
     "/exports/pdf",
     "/exports/validate",
+    "/export/docx",
+    "/exports/docx",
 )
 
 
@@ -125,6 +128,7 @@ def test_uses_post_for_state_changing_routes(src: str) -> None:
         "runStage2",
         "assembleBrief",
         "runPdfExport",
+        "runDocxExport",
     ):
         m = re.search(
             rf'{method}:.*request\("POST"', src, flags=re.DOTALL

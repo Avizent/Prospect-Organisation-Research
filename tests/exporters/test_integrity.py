@@ -238,8 +238,11 @@ def test_markdown_missing_issue() -> None:
 
 
 def test_unknown_export_format_issue() -> None:
+    # Step 38 promoted "docx" to a known format; use a token that is
+    # genuinely outside the closed taxonomy so the negative test stays
+    # meaningful.
     job_id = _seed_clean_job(
-        entry_overrides={"format": "docx"}, write_pdf=False,
+        entry_overrides={"format": "xlsx"}, write_pdf=False,
     )
     issues = validate_export_integrity(job_id)
     codes = [i.code for i in issues]

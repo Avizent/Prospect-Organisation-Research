@@ -266,36 +266,42 @@ function _renderSections(manifest) {
 
 
 // ---------------------------------------------------------------------------
-// Step 36: exports section
+// Step 36 + 38: exports section
 // ---------------------------------------------------------------------------
 //
-// The PDF export is rendered as two visually-distinct controls that never
-// merge into a single "click here" affordance:
+// Each export format is rendered as its own panel with two visually-
+// distinct controls that never merge into a single "click here"
+// affordance:
 //
-//   - "Generate PDF" button — POSTs ``/api/jobs/{id}/export/pdf``. On a
-//     201/200 we re-render the screen so the new ``exports[]`` entry shows
-//     up, alongside the download link.
-//   - "Download PDF" anchor — opens ``/api/jobs/{id}/exports/pdf`` directly
-//     so the browser handles the stream. Only appears once an export
-//     entry exists in the manifest.
+//   - "Generate <FORMAT>" button — POSTs ``/api/jobs/{id}/export/<format>``.
+//     On a 201/200 we re-render the screen so the new ``exports[]`` entry
+//     shows up alongside the download link.
+//   - "Download <FORMAT>" anchor — opens
+//     ``/api/jobs/{id}/exports/<format>`` directly so the browser handles
+//     the stream. Only appears once an export entry exists in the
+//     manifest.
 //
 // The two MUST be separate elements (see
 // ``tests/frontend/test_manifest_viewer_exports.py``): a user clicking
-// "Generate" must not silently trigger a download, and vice-versa.
+// "Generate" must not silently trigger a download, and vice-versa. Per-
+// format generate handlers are written inline (rather than parametrised)
+// so the static fence in
+// ``tests/frontend/test_manifest_viewer_lifecycle.py`` can count the
+// number of per-format export-trigger references directly.
 
-function _findPdfExportEntry(manifest) {
+function _findExportEntry(manifest, format) {
   const exports = Array.isArray(manifest.exports) ? manifest.exports : [];
   for (const entry of exports) {
-    if (entry && entry.format === "pdf") return entry;
+    if (entry && entry.format === format) return entry;
   }
   return null;
 }
 
 
-function _findPdfEntryLifecycle(lifecycle) {
+function _findEntryLifecycle(lifecycle, format) {
   if (!lifecycle || !Array.isArray(lifecycle.entries)) return null;
   for (const record of lifecycle.entries) {
-    if (record && record.format === "pdf") {
+    if (record && record.format === format) {
       return record.lifecycle || null;
     }
   }
@@ -303,9 +309,95 @@ function _findPdfEntryLifecycle(lifecycle) {
 }
 
 
-function _renderExports(container, jobId, manifest, lifecycle) {
-  const wrap = el("section", { class: "manifest-exports" }, [
-    el("h3", { text: "Exports" }),
+// Convenience wrappers — preserved as named functions so a content scan
+// for ``_findPdfExportEntry`` / ``_findPdfEntryLifecycle`` still finds
+// the symbol it expects.
+function _findPdfExportEntry(manifest) {
+  return _findExportEntry(manifest, "pdf");
+}
+
+
+function _findPdfEntryLifecycle(lifecycle) {
+  return _findEntryLifecycle(lifecycle, "pdf");
+}
+
+
+function _findDocxExportEntry(manifest) {
+  return _findExportEntry(manifest, "docx");
+}
+
+
+function _findDocxEntryLifecycle(lifecycle) {
+  return _findEntryLifecycle(lifecycle, "docx");
+}
+
+
+function _appendEntryMeta(wrap, entry) {
+  // Lightweight provenance projection so operators can verify the
+  // ``regeneration_count`` and the renderer versions at a glance.
+  const meta = el("ul", { class: "manifest-exports-meta" });
+  meta.appendChild(el("li", {}, [
+    el("strong", { text: "Filename: " }),
+    el("span", { text: String(entry.filename || "—") }),
+  ]));
+  meta.appendChild(el("li", {}, [
+    el("strong", { text: "Byte length: " }),
+    el("span", { text: String(entry.byte_length ?? "—") }),
+  ]));
+  meta.appendChild(el("li", {}, [
+    el("strong", { text: "SHA-256: " }),
+    el("code", {
+      class: "manifest-sha",
+      text: String(entry.sha256 || "—"),
+    }),
+  ]));
+  meta.appendChild(el("li", {}, [
+    el("strong", { text: "Exporter version: " }),
+    el("span", { text: String(entry.exporter_version || "—") }),
+  ]));
+  meta.appendChild(el("li", {}, [
+    el("strong", { text: "Template version: " }),
+    el("span", { text: String(entry.template_version || "—") }),
+  ]));
+  // Step 38 amendment 2: DOCX entries carry a ``template_sha256``
+  // provenance field. We render it conditionally — PDF entries do not
+  // have it, and the row stays out of the way when absent.
+  if (typeof entry.template_sha256 === "string" && entry.template_sha256) {
+    meta.appendChild(el("li", {}, [
+      el("strong", { text: "Template SHA-256: " }),
+      el("code", {
+        class: "manifest-sha",
+        text: String(entry.template_sha256),
+      }),
+    ]));
+  }
+  const renderer = entry.renderer && typeof entry.renderer === "object"
+    ? entry.renderer : {};
+  meta.appendChild(el("li", {}, [
+    el("strong", { text: "Renderer: " }),
+    el("span", {
+      text: `${renderer.name || "—"} ${renderer.version || ""}`.trim(),
+    }),
+  ]));
+  const md = entry.markdown_renderer && typeof entry.markdown_renderer === "object"
+    ? entry.markdown_renderer : {};
+  meta.appendChild(el("li", {}, [
+    el("strong", { text: "Markdown renderer: " }),
+    el("span", {
+      text: `${md.name || "—"} ${md.version || ""}`.trim(),
+    }),
+  ]));
+  meta.appendChild(el("li", {}, [
+    el("strong", { text: "Regeneration count: " }),
+    el("span", { text: String(entry.regeneration_count ?? 0) }),
+  ]));
+  wrap.appendChild(meta);
+}
+
+
+function _renderPdfPanel(container, jobId, manifest, lifecycle) {
+  const wrap = el("section", { class: "manifest-export-panel manifest-export-pdf" }, [
+    el("h4", { text: "PDF" }),
   ]);
 
   // Per-entry lifecycle lookup. Step 37 amendment 1: when the entry is
@@ -327,8 +419,6 @@ function _renderExports(container, jobId, manifest, lifecycle) {
     generateBtn.textContent = "Generating…";
     try {
       await api.runPdfExport(jobId);
-      // Re-render the whole screen so the new exports[] entry appears
-      // and the Download link materialises.
       await render(container, { id: jobId });
     } catch (err) {
       generateBtn.disabled = false;
@@ -353,11 +443,7 @@ function _renderExports(container, jobId, manifest, lifecycle) {
   });
   wrap.appendChild(el("p", {}, [generateBtn]));
 
-  // 2. Download link — only if an entry exists. Distinct element so the
-  //    operator can re-download the existing file without triggering a
-  //    re-render. A stale export is STILL downloadable per Step 37 —
-  //    we render a per-entry badge alongside the link explaining why
-  //    the file is suspect, but never block the download.
+  // 2. Download link — only if an entry exists.
   const entry = _findPdfExportEntry(manifest);
   if (entry) {
     if (entryIsStale) {
@@ -385,54 +471,7 @@ function _renderExports(container, jobId, manifest, lifecycle) {
       text: "Download PDF",
     });
     wrap.appendChild(el("p", {}, [downloadLink]));
-
-    // Lightweight provenance projection so operators can verify the
-    // ``regeneration_count`` and the renderer versions at a glance.
-    const meta = el("ul", { class: "manifest-exports-meta" });
-    meta.appendChild(el("li", {}, [
-      el("strong", { text: "Filename: " }),
-      el("span", { text: String(entry.filename || "—") }),
-    ]));
-    meta.appendChild(el("li", {}, [
-      el("strong", { text: "Byte length: " }),
-      el("span", { text: String(entry.byte_length ?? "—") }),
-    ]));
-    meta.appendChild(el("li", {}, [
-      el("strong", { text: "SHA-256: " }),
-      el("code", {
-        class: "manifest-sha",
-        text: String(entry.sha256 || "—"),
-      }),
-    ]));
-    meta.appendChild(el("li", {}, [
-      el("strong", { text: "Exporter version: " }),
-      el("span", { text: String(entry.exporter_version || "—") }),
-    ]));
-    meta.appendChild(el("li", {}, [
-      el("strong", { text: "Template version: " }),
-      el("span", { text: String(entry.template_version || "—") }),
-    ]));
-    const renderer = entry.renderer && typeof entry.renderer === "object"
-      ? entry.renderer : {};
-    meta.appendChild(el("li", {}, [
-      el("strong", { text: "Renderer: " }),
-      el("span", {
-        text: `${renderer.name || "—"} ${renderer.version || ""}`.trim(),
-      }),
-    ]));
-    const md = entry.markdown_renderer && typeof entry.markdown_renderer === "object"
-      ? entry.markdown_renderer : {};
-    meta.appendChild(el("li", {}, [
-      el("strong", { text: "Markdown renderer: " }),
-      el("span", {
-        text: `${md.name || "—"} ${md.version || ""}`.trim(),
-      }),
-    ]));
-    meta.appendChild(el("li", {}, [
-      el("strong", { text: "Regeneration count: " }),
-      el("span", { text: String(entry.regeneration_count ?? 0) }),
-    ]));
-    wrap.appendChild(meta);
+    _appendEntryMeta(wrap, entry);
   } else {
     wrap.appendChild(el("p", {
       class: "muted",
@@ -440,6 +479,98 @@ function _renderExports(container, jobId, manifest, lifecycle) {
     }));
   }
 
+  return wrap;
+}
+
+
+function _renderDocxPanel(container, jobId, manifest, lifecycle) {
+  const wrap = el("section", { class: "manifest-export-panel manifest-export-docx" }, [
+    el("h4", { text: "DOCX" }),
+  ]);
+
+  const entryLifecycle = _findDocxEntryLifecycle(lifecycle);
+  const entryIsStale = !!(entryLifecycle && entryLifecycle.stale);
+  const generateLabel = entryIsStale ? "Regenerate DOCX" : "Generate DOCX";
+
+  const generateBtn = el("button", {
+    type: "button",
+    class: "btn-generate-docx",
+    text: generateLabel,
+  });
+  generateBtn.addEventListener("click", async () => {
+    generateBtn.disabled = true;
+    generateBtn.textContent = "Generating…";
+    try {
+      await api.runDocxExport(jobId);
+      await render(container, { id: jobId });
+    } catch (err) {
+      generateBtn.disabled = false;
+      generateBtn.textContent = generateLabel;
+      if (err instanceof ApiError && err.status === 401) {
+        navigate("#/login");
+        return;
+      }
+      const banner = el("div", { class: "form-banner", role: "alert" }, [
+        el("p", {
+          text: err instanceof ApiError
+            ? `DOCX generation failed (HTTP ${err.status}).`
+            : `DOCX generation failed: ${err && err.message ? err.message : String(err)}`,
+        }),
+        el("pre", {
+          class: "detail-pre",
+          text: err instanceof ApiError ? formatDetail(err.detail) : "",
+        }),
+      ]);
+      wrap.appendChild(banner);
+    }
+  });
+  wrap.appendChild(el("p", {}, [generateBtn]));
+
+  const entry = _findDocxExportEntry(manifest);
+  if (entry) {
+    if (entryIsStale) {
+      const reasons = Array.isArray(entryLifecycle.reasons)
+        ? entryLifecycle.reasons : [];
+      wrap.appendChild(el("p", {
+        class: "export-stale-badge",
+        title: `Stale: ${reasons.join(", ")}`,
+      }, [
+        el("strong", { text: "Stale: " }),
+        el("span", {
+          text: (
+            "this DOCX was rendered from an older Markdown version. "
+            + "Regenerate before sharing externally. "
+            + `Reasons: ${reasons.join(", ")}.`
+          ),
+        }),
+      ]));
+    }
+    const downloadLink = el("a", {
+      class: "btn-download-docx",
+      href: `/api/jobs/${encodeURIComponent(jobId)}/exports/docx`,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      text: "Download DOCX",
+    });
+    wrap.appendChild(el("p", {}, [downloadLink]));
+    _appendEntryMeta(wrap, entry);
+  } else {
+    wrap.appendChild(el("p", {
+      class: "muted",
+      text: "(no DOCX generated yet)",
+    }));
+  }
+
+  return wrap;
+}
+
+
+function _renderExports(container, jobId, manifest, lifecycle) {
+  const wrap = el("section", { class: "manifest-exports" }, [
+    el("h3", { text: "Exports" }),
+  ]);
+  wrap.appendChild(_renderPdfPanel(container, jobId, manifest, lifecycle));
+  wrap.appendChild(_renderDocxPanel(container, jobId, manifest, lifecycle));
   return wrap;
 }
 

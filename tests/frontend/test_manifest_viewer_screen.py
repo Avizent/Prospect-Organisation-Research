@@ -297,9 +297,10 @@ def test_manifest_viewer_never_calls_assemble_route(
 
 def test_viewer_only_calls_get_document_manifest(viewer_src: str) -> None:
     """The viewer's api.* surface is restricted to the manifest read +
-    the Step 36 PDF-export trigger. Any other api.* call would mean
-    the viewer is doing work that belongs to a different screen."""
-    allowed = {"getDocumentManifest", "runPdfExport"}
+    the Step 36 PDF-export trigger and Step 38 DOCX-export trigger. Any
+    other api.* call would mean the viewer is doing work that belongs
+    to a different screen."""
+    allowed = {"getDocumentManifest", "runPdfExport", "runDocxExport"}
     other_api_calls = re.findall(r"api\.(\w+)\(", viewer_src)
     extra = [name for name in other_api_calls if name not in allowed]
     assert not extra, (

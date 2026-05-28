@@ -164,7 +164,7 @@ _ISSUE_SEVERITY: dict[str, str] = {
 # notion of "supported by the renderer". They overlap today but
 # stay deliberately separate so a stale schema does not silently
 # accept new formats.
-_KNOWN_EXPORT_FORMATS: frozenset[str] = frozenset({"pdf"})
+_KNOWN_EXPORT_FORMATS: frozenset[str] = frozenset({"pdf", "docx"})
 _KNOWN_EXPORTER_VERSIONS: frozenset[str] = frozenset({EXPORTER_VERSION})
 _REQUIRED_ENTRY_FIELDS: tuple[str, ...] = (
     "format",

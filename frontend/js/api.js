@@ -143,6 +143,18 @@ const api = {
       `/api/jobs/${encodeURIComponent(id)}/export/pdf`,
       { returnStatus: true }),
 
+  // Step 38: deterministic DOCX export. Mirrors ``runPdfExport`` — POST
+  // renders a byte-equal DOCX from the on-disk ``prospect_brief.md``
+  // and writes it to ``exports/prospect_brief.docx``; the manifest's
+  // ``exports[]`` array gains (or replaces) a single ``format: "docx"``
+  // entry carrying the Step-38 ``template_sha256`` provenance field.
+  // GET retrieval lives at ``/exports/docx`` and is exposed as a plain
+  // ``<a href>`` URL, identical to the PDF download pattern.
+  runDocxExport: (id) =>
+    request("POST",
+      `/api/jobs/${encodeURIComponent(id)}/export/docx`,
+      { returnStatus: true }),
+
   // Step 37: export lifecycle governance. GET-only — returns the
   // closed-taxonomy list of integrity issues computed by walking the
   // manifest's ``exports[]`` array against the on-disk files. The

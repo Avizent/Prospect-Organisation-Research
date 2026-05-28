@@ -168,10 +168,11 @@ def test_module_is_importable_in_isolation() -> None:
 
     module = importlib.import_module("backend.jobs.export_routes")
     assert hasattr(module, "router")
-    # The new router exposes exactly two routes (POST + GET). A
-    # future change to this number is a deliberate surface change
-    # that must be approved per-step.
-    assert len(module.router.routes) == 2
+    # The router exposes exactly four routes after Step 38:
+    # POST /export/pdf, GET /exports/pdf, POST /export/docx,
+    # GET /exports/docx. A future change to this number is a
+    # deliberate surface change that must be approved per-step.
+    assert len(module.router.routes) == 4
 
 
 @pytest.mark.parametrize("needle", _FORBIDDEN_STATE_WRITERS)

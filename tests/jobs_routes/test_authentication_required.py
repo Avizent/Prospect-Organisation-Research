@@ -140,6 +140,16 @@ _ROUTES: list[tuple[str, str, dict | None]] = [
         "/api/jobs/00000000-0000-4000-8000-000000000000/exports/validate",
         None,
     ),
+    (
+        "POST",
+        "/api/jobs/00000000-0000-4000-8000-000000000000/export/docx",
+        None,
+    ),
+    (
+        "GET",
+        "/api/jobs/00000000-0000-4000-8000-000000000000/exports/docx",
+        None,
+    ),
 ]
 
 

@@ -123,7 +123,9 @@ def test_write_export_rejects_unknown_format(
 ) -> None:
     job_id = _new_job_id()
     with pytest.raises(ValueError):
-        write_export(job_id, "docx", b"x")  # not in Step 36 set
+        # Step 38 added "docx" to the known set; pick a token that
+        # remains unknown so the negative test stays meaningful.
+        write_export(job_id, "xlsx", b"x")
 
 
 # ---------------------------------------------------------------------------

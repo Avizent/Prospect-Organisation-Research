@@ -844,10 +844,11 @@ def write_document_manifest(
 # array stays compact (one entry per format) and a regeneration
 # preserves ``regeneration_count`` rather than resetting it.
 
-_EXPORT_FORMATS: frozenset[str] = frozenset({"pdf"})  # Step 36 ships PDF only
+_EXPORT_FORMATS: frozenset[str] = frozenset({"pdf", "docx"})  # Steps 36+38
 
 _EXPORT_FILENAMES: dict[str, str] = {
     "pdf": "prospect_brief.pdf",
+    "docx": "prospect_brief.docx",
 }
 
 
