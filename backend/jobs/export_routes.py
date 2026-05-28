@@ -1,35 +1,62 @@
-"""HTTP API for the deterministic PDF export (Step 36).
+"""HTTP API for deterministic export generation + retrieval.
 
 Scope
 -----
-Exposes two routes:
+Exposes four routes — two per supported format:
 
     POST /api/jobs/{job_id}/export/pdf
+    POST /api/jobs/{job_id}/export/docx
     GET  /api/jobs/{job_id}/exports/pdf
+    GET  /api/jobs/{job_id}/exports/docx
 
-The POST route is a thin HTTP adapter over
-:func:`backend.exporters.pdf.render_pdf` — it gates on job state and
-markdown integrity, renders deterministic PDF bytes, atomically
-writes them to ``~/.ans-tool/jobs/{job_id}/exports/prospect_brief.pdf``,
-and atomically upserts an entry into the manifest's ``exports[]``
-array.
+The POST routes are thin HTTP adapters over the pure renderers in
+:mod:`backend.exporters.pdf` and :mod:`backend.exporters.docx` — they
+gate on job state and markdown integrity, render deterministic bytes,
+atomically write them to
+``~/.ans-tool/jobs/{job_id}/exports/prospect_brief.<fmt>``, and
+atomically upsert an entry into the manifest's ``exports[]`` array.
 
-The GET route is strictly read-only: it reads the bytes off disk and
-streams them back. It does NOT rewrite the manifest, does NOT
-recompute provenance, and does NOT touch ``state.json``. This
-property is pinned by
-``tests/jobs_routes/test_export_pdf_routes.py::test_pdf_retrieval_does_not_touch_manifest_mtime``.
+The GET routes are strictly read-only: they read the bytes off disk
+and stream them back. They do NOT rewrite the manifest, do NOT
+recompute provenance, and do NOT touch ``state.json``. This property
+is pinned by
+``tests/jobs_routes/test_export_pdf_routes.py::test_pdf_retrieval_does_not_touch_manifest_mtime``
+and the matching DOCX test in ``test_export_docx_routes.py``.
+
+Step 39 consolidation
+---------------------
+
+Steps 36 and 38 landed the PDF and DOCX renderers as two near-
+identical route bodies. Step 39 collapses the duplication behind
+three internal helpers:
+
+  * :func:`_generate_export` — the shared POST orchestration: state
+    check, manifest read, markdown-drift check, renderer call, atomic
+    write, manifest upsert.
+  * :func:`_retrieve_export` — the shared GET orchestration: state
+    check, bytes read, stale-header projection, ETag/304 handling,
+    response framing.
+  * :func:`_compute_stale_headers` — the per-entry staleness
+    projection used by both retrieval paths. Lifted verbatim from the
+    Step-36 PDF handler to preserve behaviour.
+
+Renderer-specific knowledge (which function to call, which media
+type to stream, which filename to advertise, whether to emit a
+``template_sha256`` provenance field) lives in
+:data:`backend.exporters.registry.EXPORT_RENDERERS`. The four public
+routes stay as named handlers so FastAPI emits stable per-format
+OpenAPI shapes and so the static fence at
+``tests/jobs_routes/test_export_routes_static_fence.py`` can pin
+their count at four.
 
 Fence relaxation
 ----------------
-This module imports :mod:`backend.exporters.pdf`, which is allowed —
-the new ``backend.jobs.export_routes`` module is the ONE place under
-``backend/jobs/`` allowed to do that, mirroring the Step 32
-relaxation for ``backend.jobs.assembly_routes`` against
-``backend.assembly``. A static fence at
-``tests/jobs_routes/test_export_routes_static_fence.py`` enforces
-the rule with AST analysis + substring scanning, and includes a
-positive-shape assertion that the exporters import is present.
+This module imports :mod:`backend.exporters` (pdf, docx, base,
+determinism, lifecycle, registry) — these are allowed. A static
+fence at ``tests/jobs_routes/test_export_routes_static_fence.py``
+enforces the rule with AST analysis + substring scanning, and
+includes a positive-shape assertion that both the exporters import
+and the registry import are present.
 
 Strict scope
 ------------
@@ -47,7 +74,7 @@ This module deliberately:
 
 Precondition checks (POST)
 --------------------------
-Before rendering, the route validates four preconditions in order. A
+Before rendering, the helper validates four preconditions in order. A
 failure is a 4xx response and NO files are written:
 
 1. The job exists (``state.json`` is readable).        → 404
@@ -58,7 +85,7 @@ failure is a 4xx response and NO files are written:
 
 The fourth check defends against on-disk drift between the
 assembler's last write and a manual edit of ``prospect_brief.md``
-underneath us. If the hashes disagree the PDF would carry stale
+underneath us. If the hashes disagree the export would carry stale
 content with a stale ``source_markdown_sha256`` — better to refuse
 and force the caller to re-assemble.
 
@@ -88,17 +115,7 @@ from backend.exporters.lifecycle import (
     compute_export_lifecycle,
     compute_manifest_lifecycle,
 )
-from backend.exporters.pdf import (
-    markdown_renderer_provenance,
-    render_pdf,
-    renderer_provenance,
-)
-from backend.exporters.docx import (
-    markdown_renderer_provenance as docx_markdown_renderer_provenance,
-    render_docx,
-    renderer_provenance as docx_renderer_provenance,
-    template_sha256 as docx_template_sha256,
-)
+from backend.exporters.registry import EXPORT_RENDERERS, RendererSpec
 from backend.jobs.state import JobState
 from backend.jobs.storage import (
     JobNotFound,
@@ -115,6 +132,15 @@ from backend.jobs.storage import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["jobs", "exports"])
+
+
+# ---------------------------------------------------------------------------
+# Route formats — declared as a module-level frozenset so the invariant
+# test ``test_registry_formats_match_route_formats`` can pin it against
+# the registry / lifecycle / storage frozensets in one assert.
+# ---------------------------------------------------------------------------
+
+ROUTE_FORMATS: frozenset[str] = frozenset({"pdf", "docx"})
 
 
 # ---------------------------------------------------------------------------
@@ -150,14 +176,42 @@ def _read_ans_logo_bytes() -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Response schema
+# Response schemas
 # ---------------------------------------------------------------------------
+#
+# Two near-identical response models. Each is a thin projection of the
+# manifest's ``exports[]`` entry onto the wire. ``ExportDocxResponse``
+# carries one additional Step-38 provenance field — ``template_sha256``
+# — which records the SHA-256 of the loaded ``base.docx`` template;
+# PDF entries deliberately do NOT carry the field because the PDF
+# template lives in plain-text HTML/CSS source whose drift is already
+# covered by ``template_version``.
 
 class ExportPdfResponse(BaseModel):
-    """POST /api/jobs/{job_id}/export/pdf response.
+    """POST /api/jobs/{job_id}/export/pdf response."""
 
-    Projects the manifest's ``exports[]`` entry onto the wire. Mirrors
-    the assembly route's pattern (thin projection of on-disk state).
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    format: str
+    filename: str
+    byte_length: int
+    sha256: str
+    source_markdown_sha256: str
+    generated_at: str
+    exporter_version: str
+    template_version: str
+    renderer: dict[str, str]
+    markdown_renderer: dict[str, str]
+    regeneration_count: int
+    warnings: list[str]
+
+
+class ExportDocxResponse(BaseModel):
+    """POST /api/jobs/{job_id}/export/docx response.
+
+    Mirrors :class:`ExportPdfResponse` plus the ``template_sha256``
+    provenance field (Step 38 amendment 2).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -171,6 +225,7 @@ class ExportPdfResponse(BaseModel):
     generated_at: str
     exporter_version: str
     template_version: str
+    template_sha256: str
     renderer: dict[str, str]
     markdown_renderer: dict[str, str]
     regeneration_count: int
@@ -214,20 +269,26 @@ def _http_500(reason: str, **extra: Any) -> HTTPException:
 
 
 # ---------------------------------------------------------------------------
-# Route — POST /export/pdf
+# Shared generation helper
 # ---------------------------------------------------------------------------
 
-@router.post(
-    "/{job_id}/export/pdf",
-    response_model=ExportPdfResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def post_export_pdf(
-    job_id: str,
-    response: Response,
-    _username: str = Depends(current_username),
-) -> ExportPdfResponse:
-    """Render and persist the deterministic PDF for ``job_id``."""
+def _generate_export(
+    *, fmt: str, job_id: str,
+) -> tuple[dict[str, Any], bool]:
+    """Run the shared POST orchestration for ``fmt`` on ``job_id``.
+
+    Returns ``(final_entry, pre_existed)`` where ``final_entry`` is the
+    post-upsert manifest entry (canonical projection over the wire) and
+    ``pre_existed`` is the snapshot taken before writing — the caller
+    chooses 200 vs 201 from this boolean.
+
+    Raises :class:`HTTPException` with the documented status/reason
+    pairs on any precondition failure. Behaviour is identical to the
+    pre-Step-39 per-format handlers; this function is line-for-line the
+    union of the two.
+    """
+    spec: RendererSpec = EXPORT_RENDERERS[fmt]
+
     # 1. Validate job exists.
     try:
         state = read_state(job_id)
@@ -267,56 +328,75 @@ def post_export_pdf(
             actual=on_disk_sha,
         )
 
-    # 5. Snapshot existence so we can choose 201 vs 200.
-    pre_existed = export_path_for(job_id, "pdf").exists()
+    # 5. Snapshot existence so the caller can choose 201 vs 200.
+    pre_existed = export_path_for(job_id, fmt).exists()
 
     # 6. Render.
     ans_logo = _read_ans_logo_bytes()
     try:
-        result = render_pdf(
+        result = spec.render(
             job_id=job_id,
             markdown_text=markdown_text,
             markdown_sha256=on_disk_sha,
             company_name=str(manifest.get("company_name") or ""),
             ans_logo_bytes=ans_logo,
-            prospect_logo_bytes=b"",  # Step 36: no per-prospect logo yet.
+            prospect_logo_bytes=b"",  # no per-prospect logo yet.
             now=datetime.now(timezone.utc),
         )
     except ExportError as exc:
-        log.exception("PDF render failed for job %s", job_id)
+        log.exception("%s render failed for job %s", fmt.upper(), job_id)
         raise _http_500(
             exc.reason,
             message=exc.detail or "render failed",
         ) from exc
 
-    # 7. Write atomically: PDF first, then manifest. A crash between
-    #    the two leaves an orphan PDF (invisible to retrieval because
+    # 7. Write atomically: bytes first, then manifest. A crash between
+    #    the two leaves an orphan file (invisible to retrieval because
     #    the manifest has no entry); the next successful run replaces
     #    it atomically.
-    write_export(job_id, "pdf", result.bytes)
+    write_export(job_id, fmt, result.bytes)
 
     generated_at = _iso_utc(datetime.now(timezone.utc))
     entry: dict[str, Any] = {
-        "format": "pdf",
-        "filename": "prospect_brief.pdf",
+        "format": fmt,
+        "filename": spec.filename,
         "byte_length": len(result.bytes),
         "sha256": result.sha256,
         "source_markdown_sha256": on_disk_sha,
         "generated_at": generated_at,
         "exporter_version": EXPORTER_VERSION,
         "template_version": TEMPLATE_VERSION,
-        "renderer": renderer_provenance(),
-        "markdown_renderer": markdown_renderer_provenance(),
+        "renderer": spec.renderer_provenance(),
+        "markdown_renderer": spec.markdown_renderer_provenance(),
         "regeneration_count": 0,  # overwritten by upsert helper.
         "warnings": list(result.warnings),
     }
-    final_entry = upsert_export_entry(job_id, entry)
+    if spec.template_sha256 is not None:
+        entry["template_sha256"] = spec.template_sha256()
 
-    # 8. Choose status code.
+    final_entry = upsert_export_entry(job_id, entry)
+    return final_entry, pre_existed
+
+
+# ---------------------------------------------------------------------------
+# Route — POST /export/pdf
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{job_id}/export/pdf",
+    response_model=ExportPdfResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_export_pdf(
+    job_id: str,
+    response: Response,
+    _username: str = Depends(current_username),
+) -> ExportPdfResponse:
+    """Render and persist the deterministic PDF for ``job_id``."""
+    final_entry, pre_existed = _generate_export(fmt="pdf", job_id=job_id)
     response.status_code = (
         status.HTTP_200_OK if pre_existed else status.HTTP_201_CREATED
     )
-
     return ExportPdfResponse(
         job_id=job_id,
         format=str(final_entry["format"]),
@@ -335,171 +415,6 @@ def post_export_pdf(
 
 
 # ---------------------------------------------------------------------------
-# Route — GET /exports/pdf
-# ---------------------------------------------------------------------------
-
-@router.get(
-    "/{job_id}/exports/pdf",
-)
-def get_export_pdf(
-    job_id: str,
-    request: Request,
-    _username: str = Depends(current_username),
-) -> Response:
-    """Stream the rendered PDF bytes back to the caller.
-
-    Strictly read-only: this handler does NOT touch the manifest,
-    does NOT recompute provenance, and does NOT mutate ``state.json``.
-    The ETag is computed from the on-disk file's sha256 so we can
-    short-circuit 304s without consulting the manifest.
-    """
-    # 1. Validate job exists.
-    try:
-        read_state(job_id)
-    except JobNotFound as exc:
-        raise _http_404("job_not_found", message=str(exc)) from exc
-    except ValueError as exc:
-        raise _http_404(
-            "job_not_found", message=f"invalid job id: {exc}",
-        ) from exc
-
-    # 2. Read the export bytes — 404 if absent.
-    try:
-        pdf_bytes = read_export_bytes(job_id, "pdf")
-    except JobNotFound as exc:
-        raise _http_404("export_not_found", message=str(exc)) from exc
-
-    # 3. Compute the per-entry staleness projection so we can advertise
-    #    it on response headers. Staleness is INFORMATIONAL — a stale
-    #    export is still downloadable. The retrieval handler must not
-    #    auto-regenerate.
-    stale_value = "false"
-    stale_reasons_value = ""
-    source_md_sha_value = ""
-    try:
-        manifest = read_document_manifest(job_id)
-    except JobNotFound:
-        manifest = None
-    if isinstance(manifest, dict):
-        manifest_sha = manifest.get("markdown_sha256")
-        manifest_sha_str = (
-            manifest_sha if isinstance(manifest_sha, str) else None
-        )
-        try:
-            md_text = read_prospect_brief_markdown(job_id)
-        except JobNotFound:
-            on_disk_sha: str | None = None
-        else:
-            on_disk_sha = sha256_hex(md_text.encode("utf-8"))
-
-        manifest_lifecycle = compute_manifest_lifecycle(
-            manifest, on_disk_markdown_sha256=on_disk_sha,
-        )
-        if manifest_sha_str:
-            source_md_sha_value = manifest_sha_str
-
-        entry: dict[str, Any] | None = None
-        exports = manifest.get("exports")
-        if isinstance(exports, list):
-            for candidate in exports:
-                if (
-                    isinstance(candidate, dict)
-                    and candidate.get("format") == "pdf"
-                ):
-                    entry = candidate
-                    break
-        if entry is not None:
-            entry_lifecycle = compute_export_lifecycle(
-                entry,
-                manifest_markdown_sha256=manifest_sha_str,
-                on_disk_markdown_sha256=on_disk_sha,
-            )
-            if entry_lifecycle["stale"]:
-                stale_value = "true"
-                stale_reasons_value = ",".join(entry_lifecycle["reasons"])
-        elif manifest_lifecycle["source_markdown_drift"]:
-            stale_value = "true"
-            stale_reasons_value = "source_markdown_drift"
-
-    # 4. Compute ETag from the bytes.
-    etag = f'"{sha256_hex(pdf_bytes)}"'
-
-    stale_headers: dict[str, str] = {
-        "X-Export-Stale": stale_value,
-        "X-Export-Stale-Reasons": stale_reasons_value,
-        "X-Export-Source-Markdown-SHA256": source_md_sha_value,
-    }
-
-    if request.headers.get("if-none-match") == etag:
-        headers_304 = {"ETag": etag, **stale_headers}
-        return Response(
-            status_code=status.HTTP_304_NOT_MODIFIED, headers=headers_304,
-        )
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "ETag": etag,
-            "Content-Disposition": 'inline; filename="prospect_brief.pdf"',
-            **stale_headers,
-        },
-    )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _iso_utc(dt: datetime) -> str:
-    """Render a UTC datetime as ``YYYY-MM-DDTHH:MM:SSZ``."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-# ---------------------------------------------------------------------------
-# DOCX response schema (Step 38)
-# ---------------------------------------------------------------------------
-#
-# ``ExportDocxResponse`` mirrors :class:`ExportPdfResponse` line-for-
-# line plus one DOCX-specific field — ``template_sha256``. This is
-# Amendment 2 of the Step 38 plan: a fourth provenance axis specific
-# to the DOCX renderer that records which ``base.docx`` was loaded.
-# PDF entries deliberately do NOT carry the field — the PDF renderer
-# has no on-disk template binary; its template is the Jinja HTML +
-# CSS files whose drift is already covered by ``template_version``.
-
-
-class ExportDocxResponse(BaseModel):
-    """POST /api/jobs/{job_id}/export/docx response.
-
-    Projects the manifest's ``exports[]`` DOCX entry onto the wire.
-    The shape mirrors :class:`ExportPdfResponse` plus the additional
-    ``template_sha256`` provenance field (Step 38 amendment 2).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    job_id: str
-    format: str
-    filename: str
-    byte_length: int
-    sha256: str
-    source_markdown_sha256: str
-    generated_at: str
-    exporter_version: str
-    template_version: str
-    template_sha256: str
-    renderer: dict[str, str]
-    markdown_renderer: dict[str, str]
-    regeneration_count: int
-    warnings: list[str]
-
-
-# ---------------------------------------------------------------------------
 # Route — POST /export/docx
 # ---------------------------------------------------------------------------
 
@@ -513,100 +428,11 @@ def post_export_docx(
     response: Response,
     _username: str = Depends(current_username),
 ) -> ExportDocxResponse:
-    """Render and persist the deterministic DOCX for ``job_id``.
-
-    Mirrors :func:`post_export_pdf` line-for-line for state-machine
-    and integrity gating; the only renderer-specific differences are
-    the renderer module, the on-disk filename, and the ``template_
-    sha256`` provenance field on the response.
-    """
-    # 1. Validate job exists.
-    try:
-        state = read_state(job_id)
-    except JobNotFound as exc:
-        raise _http_404("job_not_found", message=str(exc)) from exc
-    except ValueError as exc:
-        raise _http_404(
-            "job_not_found", message=f"invalid job id: {exc}",
-        ) from exc
-
-    # 2. Validate approved state.
-    if state.current_state is not JobState.APPROVED:
-        raise _http_409(
-            "job_not_approved",
-            current_state=state.current_state.value,
-            required_state=JobState.APPROVED.value,
-        )
-
-    # 3. Validate the manifest is on disk.
-    try:
-        manifest = read_document_manifest(job_id)
-    except JobNotFound as exc:
-        raise _http_409("manifest_required", message=str(exc)) from exc
-
-    # 4. Validate markdown hasn't drifted under us.
-    try:
-        markdown_text = read_prospect_brief_markdown(job_id)
-    except JobNotFound as exc:
-        raise _http_409("brief_required", message=str(exc)) from exc
-
-    on_disk_sha = sha256_hex(markdown_text.encode("utf-8"))
-    expected_sha = manifest.get("markdown_sha256")
-    if expected_sha != on_disk_sha:
-        raise _http_400(
-            "markdown_drift",
-            expected=expected_sha,
-            actual=on_disk_sha,
-        )
-
-    # 5. Snapshot existence so we can choose 201 vs 200.
-    pre_existed = export_path_for(job_id, "docx").exists()
-
-    # 6. Render.
-    ans_logo = _read_ans_logo_bytes()
-    try:
-        result = render_docx(
-            job_id=job_id,
-            markdown_text=markdown_text,
-            markdown_sha256=on_disk_sha,
-            company_name=str(manifest.get("company_name") or ""),
-            ans_logo_bytes=ans_logo,
-            prospect_logo_bytes=b"",  # Step 38: no per-prospect logo yet.
-            now=datetime.now(timezone.utc),
-        )
-    except ExportError as exc:
-        log.exception("DOCX render failed for job %s", job_id)
-        raise _http_500(
-            exc.reason,
-            message=exc.detail or "render failed",
-        ) from exc
-
-    # 7. Write atomically: DOCX first, then manifest.
-    write_export(job_id, "docx", result.bytes)
-
-    generated_at = _iso_utc(datetime.now(timezone.utc))
-    entry: dict[str, Any] = {
-        "format": "docx",
-        "filename": "prospect_brief.docx",
-        "byte_length": len(result.bytes),
-        "sha256": result.sha256,
-        "source_markdown_sha256": on_disk_sha,
-        "generated_at": generated_at,
-        "exporter_version": EXPORTER_VERSION,
-        "template_version": TEMPLATE_VERSION,
-        "template_sha256": docx_template_sha256(),
-        "renderer": docx_renderer_provenance(),
-        "markdown_renderer": docx_markdown_renderer_provenance(),
-        "regeneration_count": 0,  # overwritten by upsert helper.
-        "warnings": list(result.warnings),
-    }
-    final_entry = upsert_export_entry(job_id, entry)
-
-    # 8. Choose status code.
+    """Render and persist the deterministic DOCX for ``job_id``."""
+    final_entry, pre_existed = _generate_export(fmt="docx", job_id=job_id)
     response.status_code = (
         status.HTTP_200_OK if pre_existed else status.HTTP_201_CREATED
     )
-
     return ExportDocxResponse(
         job_id=job_id,
         format=str(final_entry["format"]),
@@ -626,25 +452,94 @@ def post_export_docx(
 
 
 # ---------------------------------------------------------------------------
-# Route — GET /exports/docx
+# Shared retrieval helper
 # ---------------------------------------------------------------------------
 
-@router.get(
-    "/{job_id}/exports/docx",
-)
-def get_export_docx(
-    job_id: str,
-    request: Request,
-    _username: str = Depends(current_username),
-) -> Response:
-    """Stream the rendered DOCX bytes back to the caller.
+def _compute_stale_headers(
+    *, job_id: str, fmt: str,
+) -> dict[str, str]:
+    """Project per-entry staleness onto the three documented headers.
 
-    Strictly read-only: mirrors :func:`get_export_pdf` and does NOT
-    touch the manifest, recompute provenance, or mutate
-    ``state.json``. The ETag is computed from the on-disk file's
-    sha256 so we can short-circuit 304s without consulting the
-    manifest.
+    Returns a dict with three keys — ``X-Export-Stale``,
+    ``X-Export-Stale-Reasons``, ``X-Export-Source-Markdown-SHA256``.
+    Degrades gracefully when the manifest is absent: ``stale=false``,
+    no reasons, empty source-sha. This shape was finalised in Step 37
+    and is pinned by the per-format ``*_stale_headers`` test modules.
     """
+    stale_value = "false"
+    stale_reasons_value = ""
+    source_md_sha_value = ""
+
+    try:
+        manifest = read_document_manifest(job_id)
+    except JobNotFound:
+        manifest = None
+    if not isinstance(manifest, dict):
+        return {
+            "X-Export-Stale": stale_value,
+            "X-Export-Stale-Reasons": stale_reasons_value,
+            "X-Export-Source-Markdown-SHA256": source_md_sha_value,
+        }
+
+    manifest_sha = manifest.get("markdown_sha256")
+    manifest_sha_str = (
+        manifest_sha if isinstance(manifest_sha, str) else None
+    )
+    try:
+        md_text = read_prospect_brief_markdown(job_id)
+    except JobNotFound:
+        on_disk_sha: str | None = None
+    else:
+        on_disk_sha = sha256_hex(md_text.encode("utf-8"))
+
+    manifest_lifecycle = compute_manifest_lifecycle(
+        manifest, on_disk_markdown_sha256=on_disk_sha,
+    )
+    if manifest_sha_str:
+        source_md_sha_value = manifest_sha_str
+
+    entry: dict[str, Any] | None = None
+    exports = manifest.get("exports")
+    if isinstance(exports, list):
+        for candidate in exports:
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("format") == fmt
+            ):
+                entry = candidate
+                break
+    if entry is not None:
+        entry_lifecycle = compute_export_lifecycle(
+            entry,
+            manifest_markdown_sha256=manifest_sha_str,
+            on_disk_markdown_sha256=on_disk_sha,
+        )
+        if entry_lifecycle["stale"]:
+            stale_value = "true"
+            stale_reasons_value = ",".join(entry_lifecycle["reasons"])
+    elif manifest_lifecycle["source_markdown_drift"]:
+        stale_value = "true"
+        stale_reasons_value = "source_markdown_drift"
+
+    return {
+        "X-Export-Stale": stale_value,
+        "X-Export-Stale-Reasons": stale_reasons_value,
+        "X-Export-Source-Markdown-SHA256": source_md_sha_value,
+    }
+
+
+def _retrieve_export(
+    *, fmt: str, job_id: str, request: Request,
+) -> Response:
+    """Stream the rendered ``fmt`` bytes back to the caller.
+
+    Strictly read-only: does NOT touch the manifest, does NOT recompute
+    provenance, and does NOT mutate ``state.json``. The ETag is
+    computed from the on-disk file's sha256 so we can short-circuit
+    304s without consulting the manifest.
+    """
+    spec: RendererSpec = EXPORT_RENDERERS[fmt]
+
     # 1. Validate job exists.
     try:
         read_state(job_id)
@@ -657,68 +552,18 @@ def get_export_docx(
 
     # 2. Read the export bytes — 404 if absent.
     try:
-        docx_bytes = read_export_bytes(job_id, "docx")
+        payload = read_export_bytes(job_id, fmt)
     except JobNotFound as exc:
         raise _http_404("export_not_found", message=str(exc)) from exc
 
     # 3. Compute the per-entry staleness projection so we can advertise
-    #    it on response headers. Same shape as the PDF handler.
-    stale_value = "false"
-    stale_reasons_value = ""
-    source_md_sha_value = ""
-    try:
-        manifest = read_document_manifest(job_id)
-    except JobNotFound:
-        manifest = None
-    if isinstance(manifest, dict):
-        manifest_sha = manifest.get("markdown_sha256")
-        manifest_sha_str = (
-            manifest_sha if isinstance(manifest_sha, str) else None
-        )
-        try:
-            md_text = read_prospect_brief_markdown(job_id)
-        except JobNotFound:
-            on_disk_sha: str | None = None
-        else:
-            on_disk_sha = sha256_hex(md_text.encode("utf-8"))
-
-        manifest_lifecycle = compute_manifest_lifecycle(
-            manifest, on_disk_markdown_sha256=on_disk_sha,
-        )
-        if manifest_sha_str:
-            source_md_sha_value = manifest_sha_str
-
-        entry: dict[str, Any] | None = None
-        exports = manifest.get("exports")
-        if isinstance(exports, list):
-            for candidate in exports:
-                if (
-                    isinstance(candidate, dict)
-                    and candidate.get("format") == "docx"
-                ):
-                    entry = candidate
-                    break
-        if entry is not None:
-            entry_lifecycle = compute_export_lifecycle(
-                entry,
-                manifest_markdown_sha256=manifest_sha_str,
-                on_disk_markdown_sha256=on_disk_sha,
-            )
-            if entry_lifecycle["stale"]:
-                stale_value = "true"
-                stale_reasons_value = ",".join(entry_lifecycle["reasons"])
-        elif manifest_lifecycle["source_markdown_drift"]:
-            stale_value = "true"
-            stale_reasons_value = "source_markdown_drift"
+    #    it on response headers. Staleness is INFORMATIONAL — a stale
+    #    export is still downloadable. The retrieval handler must not
+    #    auto-regenerate.
+    stale_headers = _compute_stale_headers(job_id=job_id, fmt=fmt)
 
     # 4. Compute ETag from the bytes.
-    etag = f'"{sha256_hex(docx_bytes)}"'
-
-    stale_headers: dict[str, str] = {
-        "X-Export-Stale": stale_value,
-        "X-Export-Stale-Reasons": stale_reasons_value,
-        "X-Export-Source-Markdown-SHA256": source_md_sha_value,
-    }
+    etag = f'"{sha256_hex(payload)}"'
 
     if request.headers.get("if-none-match") == etag:
         headers_304 = {"ETag": etag, **stale_headers}
@@ -727,16 +572,56 @@ def get_export_docx(
         )
 
     return Response(
-        content=docx_bytes,
-        media_type=(
-            "application/vnd.openxmlformats-officedocument."
-            "wordprocessingml.document"
-        ),
+        content=payload,
+        media_type=spec.media_type,
         headers={
             "ETag": etag,
-            "Content-Disposition": (
-                'inline; filename="prospect_brief.docx"'
-            ),
+            "Content-Disposition": f'inline; filename="{spec.filename}"',
             **stale_headers,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Route — GET /exports/pdf
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{job_id}/exports/pdf",
+)
+def get_export_pdf(
+    job_id: str,
+    request: Request,
+    _username: str = Depends(current_username),
+) -> Response:
+    """Stream the rendered PDF bytes back to the caller."""
+    return _retrieve_export(fmt="pdf", job_id=job_id, request=request)
+
+
+# ---------------------------------------------------------------------------
+# Route — GET /exports/docx
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{job_id}/exports/docx",
+)
+def get_export_docx(
+    job_id: str,
+    request: Request,
+    _username: str = Depends(current_username),
+) -> Response:
+    """Stream the rendered DOCX bytes back to the caller."""
+    return _retrieve_export(fmt="docx", job_id=job_id, request=request)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _iso_utc(dt: datetime) -> str:
+    """Render a UTC datetime as ``YYYY-MM-DDTHH:MM:SSZ``."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")

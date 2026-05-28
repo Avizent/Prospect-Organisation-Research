@@ -151,6 +151,22 @@ def test_exporters_import_is_present(imported: set[str]) -> None:
     )
 
 
+def test_registry_import_is_present(imported: set[str]) -> None:
+    """Positive shape (Step 39): the route module must dispatch via
+    :data:`backend.exporters.registry.EXPORT_RENDERERS`. If a future
+    refactor inlines the dispatch back into the route handlers the
+    single-source-of-truth invariant in
+    ``tests/jobs_routes/test_export_routes_internals.py`` no longer
+    has a route-side anchor — fail loudly here so the next reviewer
+    notices.
+    """
+    assert "backend.exporters.registry" in imported, (
+        "backend.jobs.export_routes must import "
+        "backend.exporters.registry — Step 39 consolidation depends "
+        "on the registry being the dispatch source"
+    )
+
+
 def test_fastapi_is_allowed(imported: set[str]) -> None:
     """Sanity check the fence does not over-reach. FastAPI is the
     route module's primary dependency."""
