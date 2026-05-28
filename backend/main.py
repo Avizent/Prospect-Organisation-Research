@@ -36,6 +36,11 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.admin.routes import router as admin_router
 from backend.auth.routes import router as auth_router
+from backend.db.session import get_session
+from backend.jobs.fake_stage2_runtime import (
+    fake_stage2_runtime_enabled,
+    install_fake_stage2_runtime,
+)
 from backend.jobs.routes import router as jobs_router
 from backend.jobs.stage2_routes import router as stage2_router
 
@@ -66,6 +71,17 @@ app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(jobs_router, prefix="/api/jobs")
 app.include_router(stage2_router, prefix="/api/jobs")
+
+
+# ---------------------------------------------------------------------------
+# Opt-in fake Stage 2 runtime (Step 25) — disabled by default.
+# ---------------------------------------------------------------------------
+# Enabled only when ANS_ENABLE_FAKE_STAGE2_RUNTIME=="1" exactly. Any
+# other value (unset, "", "0", "true", "yes", …) leaves the three
+# Stage 2 dependency providers at their 503-by-default defaults. The
+# install hook itself logs a loud warning when it fires.
+if fake_stage2_runtime_enabled():
+    install_fake_stage2_runtime(app, get_session)
 
 
 @app.get("/health")
