@@ -104,6 +104,7 @@ from backend.jobs.storage import (
     read_benefits,
     read_briefing,
     read_critic_report,
+    read_document_manifest,
     read_faq,
     read_objections,
     read_product_mapping,
@@ -921,13 +922,28 @@ def assemble_job(
     # Step 35: bump schema_version 1 → 2 and reserve the additive ``exports``
     # field as an empty list. The assembler never populates ``exports`` —
     # that is exclusively the deterministic export layer's responsibility
-    # (``backend.exporters``). Until Step 36 wires generation in, the list
-    # always serialises as ``[]`` so v2-aware readers can branch on its
-    # presence without crashing.
+    # (``backend.exporters``). Step 37 amendment: a re-assembly must
+    # PRESERVE any existing ``exports[]`` entries from a previously-written
+    # manifest so the operator does not silently lose lifecycle
+    # information (the on-disk PDF survives the re-assembly, so its
+    # provenance entry must survive too — the lifecycle layer will then
+    # surface it as ``source_entry_drift`` if the Markdown changed).
     #
     # Architectural note (carried for future): manifest schema evolution
     # is likely to become its own concern. No action here, but resist
     # accumulating schema-versioning logic inside ``markdown.py``.
+    preserved_exports: list[dict[str, Any]] = []
+    try:
+        existing = read_document_manifest(job_id)
+    except (JobNotFound, json.JSONDecodeError):
+        existing = None
+    if isinstance(existing, dict):
+        prior = existing.get("exports")
+        if isinstance(prior, list):
+            for entry in prior:
+                if isinstance(entry, dict):
+                    preserved_exports.append(dict(entry))
+
     manifest: dict[str, Any] = {
         "schema_version": 2,
         "job_id": job_id,
@@ -945,7 +961,7 @@ def assemble_job(
         ],
         "critic_verdict": verdict.value if verdict is not None else None,
         "warnings": warnings,
-        "exports": [],
+        "exports": preserved_exports,
     }
 
     manifest_path = write_document_manifest(job_id, manifest)

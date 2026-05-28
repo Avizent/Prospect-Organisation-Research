@@ -84,6 +84,10 @@ from backend.auth.sessions import current_username
 from backend.exporters import EXPORTER_VERSION, TEMPLATE_VERSION
 from backend.exporters.base import ExportError
 from backend.exporters.determinism import sha256_hex
+from backend.exporters.lifecycle import (
+    compute_export_lifecycle,
+    compute_manifest_lifecycle,
+)
 from backend.exporters.pdf import (
     markdown_renderer_provenance,
     render_pdf,
@@ -359,12 +363,72 @@ def get_export_pdf(
     except JobNotFound as exc:
         raise _http_404("export_not_found", message=str(exc)) from exc
 
-    # 3. Compute ETag from the bytes.
+    # 3. Compute the per-entry staleness projection so we can advertise
+    #    it on response headers. Staleness is INFORMATIONAL — a stale
+    #    export is still downloadable. The retrieval handler must not
+    #    auto-regenerate.
+    stale_value = "false"
+    stale_reasons_value = ""
+    source_md_sha_value = ""
+    try:
+        manifest = read_document_manifest(job_id)
+    except JobNotFound:
+        manifest = None
+    if isinstance(manifest, dict):
+        manifest_sha = manifest.get("markdown_sha256")
+        manifest_sha_str = (
+            manifest_sha if isinstance(manifest_sha, str) else None
+        )
+        try:
+            md_text = read_prospect_brief_markdown(job_id)
+        except JobNotFound:
+            on_disk_sha: str | None = None
+        else:
+            on_disk_sha = sha256_hex(md_text.encode("utf-8"))
+
+        manifest_lifecycle = compute_manifest_lifecycle(
+            manifest, on_disk_markdown_sha256=on_disk_sha,
+        )
+        if manifest_sha_str:
+            source_md_sha_value = manifest_sha_str
+
+        entry: dict[str, Any] | None = None
+        exports = manifest.get("exports")
+        if isinstance(exports, list):
+            for candidate in exports:
+                if (
+                    isinstance(candidate, dict)
+                    and candidate.get("format") == "pdf"
+                ):
+                    entry = candidate
+                    break
+        if entry is not None:
+            entry_lifecycle = compute_export_lifecycle(
+                entry,
+                manifest_markdown_sha256=manifest_sha_str,
+                on_disk_markdown_sha256=on_disk_sha,
+            )
+            if entry_lifecycle["stale"]:
+                stale_value = "true"
+                stale_reasons_value = ",".join(entry_lifecycle["reasons"])
+        elif manifest_lifecycle["source_markdown_drift"]:
+            stale_value = "true"
+            stale_reasons_value = "source_markdown_drift"
+
+    # 4. Compute ETag from the bytes.
     etag = f'"{sha256_hex(pdf_bytes)}"'
+
+    stale_headers: dict[str, str] = {
+        "X-Export-Stale": stale_value,
+        "X-Export-Stale-Reasons": stale_reasons_value,
+        "X-Export-Source-Markdown-SHA256": source_md_sha_value,
+    }
+
     if request.headers.get("if-none-match") == etag:
-        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={
-            "ETag": etag,
-        })
+        headers_304 = {"ETag": etag, **stale_headers}
+        return Response(
+            status_code=status.HTTP_304_NOT_MODIFIED, headers=headers_304,
+        )
 
     return Response(
         content=pdf_bytes,
@@ -372,6 +436,7 @@ def get_export_pdf(
         headers={
             "ETag": etag,
             "Content-Disposition": 'inline; filename="prospect_brief.pdf"',
+            **stale_headers,
         },
     )
 

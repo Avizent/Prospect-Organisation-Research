@@ -44,7 +44,7 @@ def test_route_passes_v1_manifest_through_unchanged(
     r = authed_client.get(f"/api/jobs/{created_job}/manifest")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body == {"manifest": payload}
+    assert body["manifest"] == payload
     assert "exports" not in body["manifest"]
 
 

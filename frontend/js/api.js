@@ -143,6 +143,15 @@ const api = {
       `/api/jobs/${encodeURIComponent(id)}/export/pdf`,
       { returnStatus: true }),
 
+  // Step 37: export lifecycle governance. GET-only — returns the
+  // closed-taxonomy list of integrity issues computed by walking the
+  // manifest's ``exports[]`` array against the on-disk files. The
+  // handler is strictly read-only; calling it never regenerates or
+  // removes any export.
+  getExportValidation: (id) =>
+    request("GET",
+      `/api/jobs/${encodeURIComponent(id)}/exports/validate`),
+
   // Stage 2 run — POST starts the orchestrator on an approved job.
   // The route returns 503 unless the opt-in fake runtime is wired
   // (ANS_ENABLE_FAKE_STAGE2_RUNTIME=1). The frontend treats 503 as a

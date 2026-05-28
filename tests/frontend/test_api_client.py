@@ -52,6 +52,7 @@ _REQUIRED_METHODS = (
     "assembleBrief",
     "getDocumentManifest",
     "runPdfExport",
+    "getExportValidation",
 )
 
 
@@ -97,6 +98,7 @@ _REQUIRED_PATHS = (
     "/manifest",
     "/export/pdf",
     "/exports/pdf",
+    "/exports/validate",
 )
 
 

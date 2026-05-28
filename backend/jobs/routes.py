@@ -84,6 +84,7 @@ from sqlalchemy.orm import Session as DbSession
 from backend.agents.briefing_models import Briefing
 from backend.auth.sessions import current_username
 from backend.db.session import get_db
+from backend.exporters.lifecycle import detect_stale_exports
 from backend.jobs.approval import (
     BriefingPatch,
     BriefingSection,
@@ -658,11 +659,19 @@ class DocumentManifestResponse(BaseModel):
     re-modelling those fields in a typed Pydantic shape here would
     only invite drift. ``extra="forbid"`` on the envelope still
     blocks accidental top-level additions.
+
+    Step 37 adds a sibling ``lifecycle`` field carrying a *computed*
+    projection of staleness signals derived from comparing the
+    manifest against the live ``prospect_brief.md`` on disk. The
+    projection is NOT persisted; it is a response-time read-only
+    derivation. Schema is not bumped — ``lifecycle`` lives at the
+    envelope layer alongside ``manifest`` rather than inside it.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     manifest: dict[str, Any]
+    lifecycle: dict[str, Any]
 
 
 @router.get(
@@ -696,7 +705,14 @@ def get_document_manifest(
         # _validate_job_id raised ValueError on a non-UUID job_id.
         # Matched last because JSONDecodeError subclasses ValueError.
         raise _http_404(f"job not found: {exc}") from exc
-    return DocumentManifestResponse(manifest=manifest)
+
+    # Step 37: compute the lifecycle projection alongside the manifest
+    # so the viewer can render the stale UX without a second round-trip.
+    # This is strictly read-only — ``detect_stale_exports`` reads the
+    # manifest plus the on-disk Markdown and produces a derived dict.
+    # We do not persist this projection.
+    lifecycle = detect_stale_exports(job_id)
+    return DocumentManifestResponse(manifest=manifest, lifecycle=lifecycle)
 
 
 # ---------------------------------------------------------------------------

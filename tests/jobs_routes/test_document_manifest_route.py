@@ -78,7 +78,9 @@ def test_route_returns_manifest_envelope_when_file_present(
     r = authed_client.get(f"/api/jobs/{created_job}/manifest")
     assert r.status_code == 200, r.text
     payload = r.json()
-    assert set(payload.keys()) == {"manifest"}
+    # Step 37 added a sibling ``lifecycle`` field to the envelope; the
+    # manifest dict still round-trips verbatim under ``manifest``.
+    assert set(payload.keys()) == {"manifest", "lifecycle"}
     assert payload["manifest"] == _SAMPLE_MANIFEST
 
 

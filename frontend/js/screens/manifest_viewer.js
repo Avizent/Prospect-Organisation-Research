@@ -113,10 +113,23 @@ function _row(label, value) {
 }
 
 
-function _renderSummary(manifest) {
+function _renderSummary(manifest, lifecycle) {
   // Every value goes through textContent (via the el() helper), so
   // a tampered manifest cannot pivot a string into script execution.
-  return el("section", { class: "manifest-summary" }, [
+  const manifestSha = manifest.markdown_sha256 || "—";
+  const onDiskSha = (lifecycle && lifecycle.manifest
+                      && typeof lifecycle.manifest.on_disk_markdown_sha256 === "string")
+    ? lifecycle.manifest.on_disk_markdown_sha256
+    : null;
+  const drift = !!(lifecycle && lifecycle.manifest
+                    && lifecycle.manifest.source_markdown_drift);
+
+  // The two SHA rows are visually paired so an operator can compare
+  // them by eye. When they diverge we tag both with .sha-mismatch.
+  const manifestShaClass = drift ? "manifest-sha sha-mismatch" : "manifest-sha";
+  const onDiskShaClass = drift ? "manifest-sha sha-mismatch" : "manifest-sha";
+
+  const rows = [
     el("h3", { text: "Summary" }),
     _row("Schema version", manifest.schema_version),
     _row("Generated at", manifest.generated_at),
@@ -126,13 +139,52 @@ function _renderSummary(manifest) {
     _row("Markdown byte length", manifest.markdown_byte_length),
     _row("Critic verdict", manifest.critic_verdict),
     el("p", {}, [
-      el("strong", { text: "Markdown SHA-256: " }),
-      // Step 34 plan decision: render the FULL hash, no truncation, so
-      // operators can verify integrity by eye. Wrapped in <code> for
-      // monospace presentation.
+      el("strong", { text: "Manifest Markdown SHA-256: " }),
       el("code", {
-        class: "manifest-sha",
-        text: manifest.markdown_sha256 || "—",
+        class: manifestShaClass,
+        text: manifestSha,
+      }),
+    ]),
+  ];
+
+  if (onDiskSha !== null) {
+    rows.push(el("p", {}, [
+      el("strong", { text: "Source Markdown SHA-256: " }),
+      el("code", {
+        class: onDiskShaClass,
+        text: onDiskSha,
+      }),
+    ]));
+  }
+
+  return el("section", { class: "manifest-summary" }, rows);
+}
+
+
+// Amendment 1: ``source_markdown_drift`` is an error-severity
+// condition. We surface it as a prominent manifest-level banner ABOVE
+// every other panel so an operator sees it immediately on screen
+// load. ``source_entry_drift`` is intentionally NOT surfaced here —
+// it lives on the per-export stale badge inside the Exports section.
+function _renderSourceDriftBanner(lifecycle) {
+  if (!(lifecycle && lifecycle.manifest
+        && lifecycle.manifest.source_markdown_drift)) {
+    return null;
+  }
+  return el("div", {
+    class: "manifest-banner manifest-banner-error source-markdown-drift",
+    role: "alert",
+  }, [
+    el("p", {}, [
+      el("strong", { text: "Source Markdown drift — " }),
+      el("span", {
+        text: (
+          "the manifest's recorded markdown_sha256 no longer matches "
+          + "prospect_brief.md on disk. Every downstream artefact, "
+          + "including the current PDF export, may be stale. "
+          + "Re-assemble the brief from the job inspector to refresh "
+          + "the manifest before regenerating exports."
+        ),
       }),
     ]),
   ]);
@@ -240,17 +292,35 @@ function _findPdfExportEntry(manifest) {
 }
 
 
-function _renderExports(container, jobId, manifest) {
+function _findPdfEntryLifecycle(lifecycle) {
+  if (!lifecycle || !Array.isArray(lifecycle.entries)) return null;
+  for (const record of lifecycle.entries) {
+    if (record && record.format === "pdf") {
+      return record.lifecycle || null;
+    }
+  }
+  return null;
+}
+
+
+function _renderExports(container, jobId, manifest, lifecycle) {
   const wrap = el("section", { class: "manifest-exports" }, [
     el("h3", { text: "Exports" }),
   ]);
+
+  // Per-entry lifecycle lookup. Step 37 amendment 1: when the entry is
+  // stale we flip the "Generate PDF" label to "Regenerate PDF" — same
+  // button, same class, same handler; only the label changes.
+  const entryLifecycle = _findPdfEntryLifecycle(lifecycle);
+  const entryIsStale = !!(entryLifecycle && entryLifecycle.stale);
+  const generateLabel = entryIsStale ? "Regenerate PDF" : "Generate PDF";
 
   // 1. Generate button — always present (regeneration is allowed and bumps
   //    ``regeneration_count`` on the manifest entry).
   const generateBtn = el("button", {
     type: "button",
     class: "btn-generate-pdf",
-    text: "Generate PDF",
+    text: generateLabel,
   });
   generateBtn.addEventListener("click", async () => {
     generateBtn.disabled = true;
@@ -262,7 +332,7 @@ function _renderExports(container, jobId, manifest) {
       await render(container, { id: jobId });
     } catch (err) {
       generateBtn.disabled = false;
-      generateBtn.textContent = "Generate PDF";
+      generateBtn.textContent = generateLabel;
       if (err instanceof ApiError && err.status === 401) {
         navigate("#/login");
         return;
@@ -285,9 +355,28 @@ function _renderExports(container, jobId, manifest) {
 
   // 2. Download link — only if an entry exists. Distinct element so the
   //    operator can re-download the existing file without triggering a
-  //    re-render.
+  //    re-render. A stale export is STILL downloadable per Step 37 —
+  //    we render a per-entry badge alongside the link explaining why
+  //    the file is suspect, but never block the download.
   const entry = _findPdfExportEntry(manifest);
   if (entry) {
+    if (entryIsStale) {
+      const reasons = Array.isArray(entryLifecycle.reasons)
+        ? entryLifecycle.reasons : [];
+      wrap.appendChild(el("p", {
+        class: "export-stale-badge",
+        title: `Stale: ${reasons.join(", ")}`,
+      }, [
+        el("strong", { text: "Stale: " }),
+        el("span", {
+          text: (
+            "this PDF was rendered from an older Markdown version. "
+            + "Regenerate before sharing externally. "
+            + `Reasons: ${reasons.join(", ")}.`
+          ),
+        }),
+      ]));
+    }
     const downloadLink = el("a", {
       class: "btn-download-pdf",
       href: `/api/jobs/${encodeURIComponent(jobId)}/exports/pdf`,
@@ -406,6 +495,14 @@ export async function render(container, params) {
                     && payload.manifest !== null)
     ? payload.manifest
     : {};
+  // Step 37: the envelope carries a sibling ``lifecycle`` projection.
+  // It is read-only and computed server-side from the manifest plus
+  // the on-disk Markdown; we treat absence defensively so an older
+  // backend (with no lifecycle field) keeps rendering correctly.
+  const lifecycle = (payload && typeof payload.lifecycle === "object"
+                      && payload.lifecycle !== null)
+    ? payload.lifecycle
+    : { manifest: {}, entries: [] };
 
   clear(container);
 
@@ -433,10 +530,15 @@ export async function render(container, params) {
     ]),
   ]));
 
-  container.appendChild(_renderSummary(manifest));
+  // Amendment 1: prominent error banner above every panel when
+  // ``source_markdown_drift`` is present.
+  const driftBanner = _renderSourceDriftBanner(lifecycle);
+  if (driftBanner) container.appendChild(driftBanner);
+
+  container.appendChild(_renderSummary(manifest, lifecycle));
   container.appendChild(_renderOutputs(manifest));
   container.appendChild(_renderArtefacts(manifest));
   container.appendChild(_renderSections(manifest));
-  container.appendChild(_renderExports(container, id, manifest));
+  container.appendChild(_renderExports(container, id, manifest, lifecycle));
   container.appendChild(_renderWarnings(manifest));
 }
