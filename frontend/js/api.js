@@ -94,6 +94,16 @@ const api = {
   getBriefing: (id) =>
     request("GET", `/api/jobs/${encodeURIComponent(id)}/briefing`),
 
+  // Stage 2 run — POST starts the orchestrator on an approved job.
+  // The route returns 503 unless the opt-in fake runtime is wired
+  // (ANS_ENABLE_FAKE_STAGE2_RUNTIME=1). The frontend treats 503 as a
+  // documented runtime-disabled state, not as a crash. The body
+  // requires ``knowledge_bundle``; ``user_context`` is optional.
+  runStage2: (id, body) =>
+    request("POST",
+      `/api/jobs/${encodeURIComponent(id)}/stage2/run`,
+      { json: body }),
+
   // Approval gate
   openForEditing: (id) =>
     request("POST", `/api/jobs/${encodeURIComponent(id)}/approval/open`),
