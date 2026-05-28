@@ -34,6 +34,7 @@ validated with a hand-rolled check (Pydantic would be overkill).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -825,7 +826,7 @@ def write_document_manifest(
 
 
 # ---------------------------------------------------------------------------
-# Exports (Step 36)
+# Exports (Steps 36 / 38 / 40)
 # ---------------------------------------------------------------------------
 #
 # The export layer (``backend.exporters``) produces derivative artefacts
@@ -839,10 +840,46 @@ def write_document_manifest(
 # package is the single source of truth for what bytes a given
 # ``format`` carries.
 #
-# ``upsert_export_entry`` is the one place that knows the manifest's
-# v2 ``exports[]`` schema. It performs an in-place upsert so the
-# array stays compact (one entry per format) and a regeneration
-# preserves ``regeneration_count`` rather than resetting it.
+# Step 40 — append-only immutable lineage
+# ---------------------------------------
+#
+# ``exports[]`` is now **append-only**. Every new render appends a
+# new entry; existing entries are NEVER mutated and NEVER removed.
+# Each entry carries:
+#
+#   * ``export_id`` (== ``sha256``) — content-addressed identity
+#   * ``version: int`` — monotonic per (job_id, format), starts at 1
+#   * ``supersedes: str | None`` — the prior latest export_id for
+#     that format, or ``None`` for v1. (Reverse lineage —
+#     ``superseded_by`` — is derived dynamically from the array, never
+#     persisted; this keeps every existing entry strictly immutable.)
+#   * ``manifest_sha256_at_export: str`` — SHA-256 of the canonical
+#     ``document_manifest.json`` bytes that were the *input* to this
+#     render. Captures full manifest provenance, not just markdown
+#     provenance.
+#   * ``regeneration_count: int`` — derived from ``version - 1`` and
+#     persisted for wire-compat with Step 36/38 consumers.
+#
+# A new top-level field ``latest_export_id: {format: export_id}`` is
+# the O(1) pointer the route layer uses to choose "what is current"
+# without re-deriving from positional order.
+#
+# Bytes are written twice: once to the stable alias
+# ``exports/prospect_brief.{fmt}`` (consumed by ``read_export_bytes``
+# / the GET route) and once to the per-version archive
+# ``exports/archive/prospect_brief.v{N}.{fmt}``. The archive copy is
+# the source of truth; the alias is route-layer convenience.
+#
+# Idempotency: if a new render produces ``sha256 ==
+# latest_export_id[fmt]``, ``upsert_export_entry`` short-circuits —
+# no new entry is appended, ``was_appended`` is ``False``, and the
+# existing entry is returned. Bytes still ride through to disk via
+# the caller (a no-op rewrite of identical content is harmless).
+#
+# Lazy v2→v3 migration: ``read_document_manifest`` projects a v3
+# view over any v1/v2 manifest on read; the on-disk file is only
+# rewritten on the next ``upsert_export_entry`` call, at which point
+# it is materialised as canonical v3.
 
 _EXPORT_FORMATS: frozenset[str] = frozenset({"pdf", "docx"})  # Steps 36+38
 
@@ -851,9 +888,18 @@ _EXPORT_FILENAMES: dict[str, str] = {
     "docx": "prospect_brief.docx",
 }
 
+_MANIFEST_SCHEMA_VERSION: int = 3  # Step 40 — append-only lineage.
+
+# Sub-folder under ``exports/`` for the immutable per-version archive.
+_EXPORT_ARCHIVE_FOLDER_NAME: str = "archive"
+
 
 def _exports_folder(job_id: str) -> Path:
     return job_folder(job_id) / "exports"
+
+
+def _exports_archive_folder(job_id: str) -> Path:
+    return _exports_folder(job_id) / _EXPORT_ARCHIVE_FOLDER_NAME
 
 
 def _export_path(job_id: str, format: str) -> Path:
@@ -863,6 +909,27 @@ def _export_path(job_id: str, format: str) -> Path:
             f"expected one of {sorted(_EXPORT_FORMATS)}"
         )
     return _exports_folder(job_id) / _EXPORT_FILENAMES[format]
+
+
+def _archive_export_path(job_id: str, format: str, version: int) -> Path:
+    """Return the on-disk path for the immutable archived export bytes.
+
+    Layout: ``exports/archive/prospect_brief.v{N}.{fmt}``. Versions
+    are monotonic per (job_id, format) and start at 1.
+    """
+    if format not in _EXPORT_FORMATS:
+        raise ValueError(
+            f"unknown export format {format!r}; "
+            f"expected one of {sorted(_EXPORT_FORMATS)}"
+        )
+    if not isinstance(version, int) or version < 1:
+        raise ValueError(
+            f"export archive version must be a positive int, got {version!r}"
+        )
+    return (
+        _exports_archive_folder(job_id)
+        / f"prospect_brief.v{version}.{format}"
+    )
 
 
 def _atomic_write_bytes(target: Path, payload: bytes) -> None:
@@ -876,18 +943,36 @@ def _atomic_write_bytes(target: Path, payload: bytes) -> None:
 
 
 def write_export(job_id: str, format: str, payload: bytes) -> Path:
-    """Write the export bytes to ``exports/{filename}`` atomically.
+    """Write the export bytes to the stable alias atomically.
 
     Returns the path written. Creates the per-job exports folder if
-    absent. Does NOT touch the manifest — callers compose the write
-    with :func:`upsert_export_entry` so the on-disk file and the
-    manifest entry land together. (We deliberately do PDF-first then
-    manifest: a crash between the two leaves an orphan PDF that is
-    invisible to retrieval because the manifest has no entry, and
-    the next successful run overwrites atomically.)
+    absent. Does NOT touch the manifest and does NOT write the
+    per-version archive copy — callers compose the write with
+    :func:`write_export_archive` and :func:`upsert_export_entry` so
+    the archive copy, the alias, and the manifest entry all land
+    together. (We deliberately do archive-first then alias then
+    manifest: a crash mid-sequence leaves either an orphan archive
+    file or an orphan alias file, both of which are invisible to
+    retrieval because the manifest has no entry, and the next
+    successful run replaces atomically.)
     """
     create_job_folder(job_id)
     target = _export_path(job_id, format)
+    _atomic_write_bytes(target, payload)
+    return target
+
+
+def write_export_archive(
+    job_id: str, format: str, version: int, payload: bytes,
+) -> Path:
+    """Write the per-version archive copy atomically (Step 40).
+
+    Returns the path written. The archive copy is the immutable
+    source-of-truth for that version's bytes; the stable alias
+    written by :func:`write_export` is route-layer convenience.
+    """
+    create_job_folder(job_id)
+    target = _archive_export_path(job_id, format, version)
     _atomic_write_bytes(target, payload)
     return target
 
@@ -905,6 +990,22 @@ def read_export_bytes(job_id: str, format: str) -> bytes:
     return path.read_bytes()
 
 
+def read_export_archive_bytes(
+    job_id: str, format: str, version: int,
+) -> bytes:
+    """Read the per-version archive bytes from disk (Step 40).
+
+    Raises :class:`JobNotFound` if the file is absent.
+    """
+    path = _archive_export_path(job_id, format, version)
+    if not path.exists():
+        raise JobNotFound(
+            f"export archive v{version} for {format!r} "
+            f"not found for job {job_id}"
+        )
+    return path.read_bytes()
+
+
 def export_path_for(job_id: str, format: str) -> Path:
     """Return the on-disk path the export *would* live at.
 
@@ -914,66 +1015,230 @@ def export_path_for(job_id: str, format: str) -> Path:
     return _export_path(job_id, format)
 
 
+def export_archive_path_for(
+    job_id: str, format: str, version: int,
+) -> Path:
+    """Return the on-disk path the archive entry *would* live at.
+
+    Helper for tests; does not check existence.
+    """
+    return _archive_export_path(job_id, format, version)
+
+
+# ---------------------------------------------------------------------------
+# v3 manifest projector — lazy migration from v1/v2 on read
+# ---------------------------------------------------------------------------
+
+def _sha256_hex(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def read_document_manifest_sha256(job_id: str) -> str | None:
+    """Return SHA-256 of the on-disk ``document_manifest.json`` bytes.
+
+    The hash is taken over the canonical on-disk byte stream (whatever
+    :func:`write_document_manifest` last wrote). Returns ``None`` if
+    the file is absent. Used by :func:`upsert_export_entry` to record
+    ``manifest_sha256_at_export`` on each new entry — provenance of the
+    manifest state the export was rendered against.
+    """
+    path = _document_manifest_path(job_id)
+    if not path.exists():
+        return None
+    return _sha256_hex(path.read_bytes())
+
+
+def _project_manifest_v3(raw: dict[str, Any]) -> dict[str, Any]:
+    """Return a canonical v3-shaped view of a v1/v2/v3 manifest dict.
+
+    The projection is purely in-memory and is used **only inside**
+    :func:`upsert_export_entry` to compute the v3 lineage fields before
+    materialising the manifest to disk. The public read helper
+    :func:`read_document_manifest` deliberately does NOT pass through
+    this projector — Step 34/35/37 callers (the manifest route, the
+    assembler) require byte-for-byte passthrough of legacy v1/v2 files.
+
+    * v1: missing ``exports`` → added as ``[]``. Then promoted to v2.
+    * v2: each entry receives the v3 lineage fields (``export_id``,
+      ``version``, ``supersedes``, ``manifest_sha256_at_export``,
+      ``regeneration_count``) derived from position-in-array and
+      content (``export_id`` defaults to ``sha256`` when absent).
+      A top-level ``latest_export_id: {fmt: export_id}`` map is built
+      from the last entry per format.
+    * v3: passed through; ``latest_export_id`` defaulted to ``{}`` if
+      missing.
+
+    No on-disk write happens here — :func:`upsert_export_entry` is the
+    only writer that materialises v3 to disk.
+    """
+    projected = dict(raw)
+    schema_version = projected.get("schema_version", 1)
+    try:
+        schema_int = int(schema_version) if schema_version is not None else 1
+    except (TypeError, ValueError):
+        schema_int = 1
+
+    raw_exports = projected.get("exports")
+    if not isinstance(raw_exports, list):
+        raw_exports = []
+
+    if schema_int >= _MANIFEST_SCHEMA_VERSION:
+        # Already v3 (or beyond). Ensure latest_export_id is a dict.
+        latest = projected.get("latest_export_id")
+        if not isinstance(latest, dict):
+            projected["latest_export_id"] = {}
+        return projected
+
+    # v1 / v2 → projected v3.
+    upgraded_entries: list[Any] = []
+    per_format_count: dict[str, int] = {}
+    latest_map: dict[str, str] = {}
+    for entry in raw_exports:
+        if not isinstance(entry, dict):
+            upgraded_entries.append(entry)
+            continue
+        fmt_raw = entry.get("format")
+        if not isinstance(fmt_raw, str) or not fmt_raw:
+            upgraded_entries.append(entry)
+            continue
+        position = per_format_count.get(fmt_raw, 0) + 1
+        per_format_count[fmt_raw] = position
+        upgraded = dict(entry)
+        sha = entry.get("sha256")
+        sha_str = sha if isinstance(sha, str) else ""
+        if "export_id" not in upgraded or not upgraded.get("export_id"):
+            upgraded["export_id"] = sha_str
+        if "version" not in upgraded or not isinstance(
+            upgraded.get("version"), int,
+        ):
+            upgraded["version"] = position
+        if "supersedes" not in upgraded:
+            upgraded["supersedes"] = None
+        if "manifest_sha256_at_export" not in upgraded:
+            upgraded["manifest_sha256_at_export"] = ""
+        if "regeneration_count" not in upgraded:
+            upgraded["regeneration_count"] = position - 1
+        upgraded_entries.append(upgraded)
+        eid = upgraded.get("export_id")
+        if isinstance(eid, str) and eid:
+            latest_map[fmt_raw] = eid
+
+    projected["schema_version"] = _MANIFEST_SCHEMA_VERSION
+    projected["exports"] = upgraded_entries
+    projected["latest_export_id"] = latest_map
+    return projected
+
+
 def upsert_export_entry(
     job_id: str, entry: dict[str, Any],
-) -> dict[str, Any]:
-    """Insert or replace one entry in the manifest's ``exports[]``.
+) -> tuple[dict[str, Any], bool]:
+    """Append an immutable lineage entry to ``manifest.exports[]``.
 
-    Behaviour:
+    Behaviour (Step 40 — append-only):
 
     * If ``document_manifest.json`` is missing, raises
       :class:`JobNotFound` — the caller must assemble the brief
       first.
-    * If the manifest's ``schema_version`` is 1, the manifest is
-      migrated to 2 by adding ``exports: []`` (the assembler has
-      already been bumped to write v2 on every fresh assembly; this
-      branch protects against a half-migrated job folder produced
-      by an older build).
-    * If an entry already exists with the same ``format``, the new
-      entry replaces it and inherits ``regeneration_count = old + 1``.
-      The provided ``entry`` should pass ``regeneration_count`` as
-      0 — this helper will overwrite it with the incremented value.
-    * Otherwise the new entry is appended with
-      ``regeneration_count = 0``.
+    * The manifest is read through the v3 projector
+      (:func:`_project_manifest_v3`); v1/v2 manifests are upgraded
+      in-memory then materialised as canonical v3 by the write at
+      the end of this call.
+    * **Idempotency.** If the new ``entry["sha256"]`` equals the
+      current ``latest_export_id[fmt]`` (the renderer produced the
+      exact bytes already on record), no append happens. The
+      existing entry is returned with ``was_appended=False``. The
+      manifest file is **not rewritten** in this branch.
+    * Otherwise the entry is appended with:
+        - ``export_id`` = the new ``sha256``,
+        - ``version`` = ``max(prior versions for fmt) + 1``,
+        - ``supersedes`` = the prior ``latest_export_id[fmt]`` (or
+          ``None`` if this is v1),
+        - ``manifest_sha256_at_export`` = SHA-256 of the on-disk
+          ``document_manifest.json`` bytes *as they exist now*
+          (captures the manifest state the export was rendered
+          against; reverse lineage is derived, never persisted),
+        - ``regeneration_count`` = ``version - 1`` (derived; kept on
+          the entry for wire-compat with Step 36/38 consumers).
+      ``latest_export_id[fmt]`` is updated. Prior entries are left
+      strictly unchanged.
 
-    Returns the final entry that was written (so the caller can
-    surface ``regeneration_count`` in the HTTP response).
-
-    The write is atomic via :func:`_atomic_write_json`.
+    Returns ``(final_entry, was_appended)``. The write is atomic via
+    :func:`_atomic_write_json`.
     """
     if "format" not in entry:
         raise ValueError("export entry must carry a 'format' key")
 
-    manifest = read_document_manifest(job_id)
-
-    # Schema migration — additive.
-    if int(manifest.get("schema_version", 1)) < 2:
-        manifest["schema_version"] = 2
-    if "exports" not in manifest or not isinstance(manifest.get("exports"), list):
-        manifest["exports"] = []
-
     fmt = entry["format"]
-    exports = list(manifest["exports"])
-    existing_index: int | None = None
-    existing: dict[str, Any] | None = None
-    for i, candidate in enumerate(exports):
-        if isinstance(candidate, dict) and candidate.get("format") == fmt:
-            existing_index = i
-            existing = candidate
-            break
+    if not isinstance(fmt, str) or fmt not in _EXPORT_FORMATS:
+        raise ValueError(
+            f"unknown export format {fmt!r}; "
+            f"expected one of {sorted(_EXPORT_FORMATS)}"
+        )
 
-    final_entry = dict(entry)
-    if existing is not None:
-        prior_count = int(existing.get("regeneration_count", 0))
-        final_entry["regeneration_count"] = prior_count + 1
-        exports[existing_index] = final_entry  # type: ignore[index]
-    else:
-        final_entry["regeneration_count"] = 0
-        exports.append(final_entry)
+    # Capture the manifest SHA-256 BEFORE we mutate it — this is the
+    # manifest state the renderer operated on.
+    manifest_sha_at_export = read_document_manifest_sha256(job_id) or ""
 
+    # Read raw manifest from disk, then project to v3 internally so the
+    # public ``read_document_manifest`` can remain a verbatim
+    # passthrough for legacy v1/v2 callers (the manifest route, the
+    # assembler).
+    raw_manifest = read_document_manifest(job_id)
+    if not isinstance(raw_manifest, dict):
+        raise ValueError(
+            f"document_manifest.json for {job_id} is not a JSON object"
+        )
+    manifest = _project_manifest_v3(raw_manifest)
+    exports = list(manifest.get("exports") or [])
+    latest_map = dict(manifest.get("latest_export_id") or {})
+
+    new_sha_raw = entry.get("sha256")
+    new_sha = new_sha_raw if isinstance(new_sha_raw, str) else ""
+
+    # Idempotency: same bytes as current latest → no-op.
+    if new_sha and latest_map.get(fmt) == new_sha:
+        # Locate the existing entry to return verbatim.
+        for candidate in reversed(exports):
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("format") == fmt
+                and candidate.get("export_id") == new_sha
+            ):
+                return dict(candidate), False
+        # If we got here the latest_export_id pointer is stale; fall
+        # through to the append path and self-heal on the next write.
+
+    # Compute version and supersedes.
+    prior_version = 0
+    for candidate in exports:
+        if (
+            isinstance(candidate, dict)
+            and candidate.get("format") == fmt
+        ):
+            v_raw = candidate.get("version")
+            if isinstance(v_raw, int) and v_raw > prior_version:
+                prior_version = v_raw
+    new_version = prior_version + 1
+    prior_latest = latest_map.get(fmt)
+    supersedes = prior_latest if isinstance(prior_latest, str) and prior_latest else None
+
+    final_entry: dict[str, Any] = dict(entry)
+    final_entry["export_id"] = new_sha
+    final_entry["version"] = new_version
+    final_entry["supersedes"] = supersedes
+    final_entry["manifest_sha256_at_export"] = manifest_sha_at_export
+    final_entry["regeneration_count"] = new_version - 1
+
+    exports.append(final_entry)
+    if new_sha:
+        latest_map[fmt] = new_sha
+
+    manifest["schema_version"] = _MANIFEST_SCHEMA_VERSION
     manifest["exports"] = exports
+    manifest["latest_export_id"] = latest_map
+
     write_document_manifest(job_id, manifest)
-    return final_entry
+    return final_entry, True
 
 
 def read_document_manifest(job_id: str) -> dict[str, Any]:
@@ -984,6 +1249,15 @@ def read_document_manifest(job_id: str) -> dict[str, Any]:
     viewer. The assembler is the only writer; this helper only
     persists the parse and lets the caller decide what to do with
     a malformed-on-disk file.
+
+    Step 40 note: this helper deliberately does NOT project legacy
+    v1/v2 manifests into the v3 shape. The Step 34 manifest route, the
+    Step 37 assembler-preservation contract, and the
+    :func:`compute_manifest_lifecycle` helper all rely on byte-for-byte
+    passthrough — surfacing synthetic v3 lineage fields here would
+    silently mutate those callers. The v3 projection is the private
+    concern of :func:`upsert_export_entry`, which materialises the
+    upgraded manifest to disk before any consumer sees the new shape.
 
     Raises
     ------

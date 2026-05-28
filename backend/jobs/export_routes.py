@@ -126,6 +126,7 @@ from backend.jobs.storage import (
     read_state,
     upsert_export_entry,
     write_export,
+    write_export_archive,
 )
 
 
@@ -188,7 +189,21 @@ def _read_ans_logo_bytes() -> bytes:
 # covered by ``template_version``.
 
 class ExportPdfResponse(BaseModel):
-    """POST /api/jobs/{job_id}/export/pdf response."""
+    """POST /api/jobs/{job_id}/export/pdf response.
+
+    Step 40 additions:
+
+      * ``export_id`` — content-addressed lineage id (== ``sha256``).
+      * ``version`` — monotonic per (job_id, format), starts at 1.
+      * ``supersedes`` — the prior latest ``export_id``, or ``None``
+        for v1.
+      * ``manifest_sha256_at_export`` — SHA-256 of the canonical
+        ``document_manifest.json`` bytes that were the input to this
+        render.
+      * ``regenerated`` — ``True`` if a new lineage entry was
+        appended, ``False`` if this call was an idempotent no-op
+        (identical bytes to the current latest).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -205,13 +220,19 @@ class ExportPdfResponse(BaseModel):
     markdown_renderer: dict[str, str]
     regeneration_count: int
     warnings: list[str]
+    export_id: str
+    version: int
+    supersedes: str | None
+    manifest_sha256_at_export: str
+    regenerated: bool
 
 
 class ExportDocxResponse(BaseModel):
     """POST /api/jobs/{job_id}/export/docx response.
 
     Mirrors :class:`ExportPdfResponse` plus the ``template_sha256``
-    provenance field (Step 38 amendment 2).
+    provenance field (Step 38 amendment 2). Step 40 lineage fields
+    are identical to the PDF response shape.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -230,6 +251,11 @@ class ExportDocxResponse(BaseModel):
     markdown_renderer: dict[str, str]
     regeneration_count: int
     warnings: list[str]
+    export_id: str
+    version: int
+    supersedes: str | None
+    manifest_sha256_at_export: str
+    regenerated: bool
 
 
 # ---------------------------------------------------------------------------
@@ -274,18 +300,30 @@ def _http_500(reason: str, **extra: Any) -> HTTPException:
 
 def _generate_export(
     *, fmt: str, job_id: str,
-) -> tuple[dict[str, Any], bool]:
+) -> tuple[dict[str, Any], bool, bool]:
     """Run the shared POST orchestration for ``fmt`` on ``job_id``.
 
-    Returns ``(final_entry, pre_existed)`` where ``final_entry`` is the
-    post-upsert manifest entry (canonical projection over the wire) and
-    ``pre_existed`` is the snapshot taken before writing — the caller
-    chooses 200 vs 201 from this boolean.
+    Returns ``(final_entry, pre_existed, was_appended)`` where:
+
+      * ``final_entry`` — the post-upsert manifest entry (canonical
+        projection over the wire).
+      * ``pre_existed`` — snapshot of whether the stable-alias file
+        existed before this call; the caller chooses 200 vs 201 from
+        this boolean.
+      * ``was_appended`` — ``True`` if a new lineage entry was
+        appended to ``exports[]``; ``False`` if Step 40's idempotency
+        rule fired (the renderer produced bytes identical to the
+        current latest).
 
     Raises :class:`HTTPException` with the documented status/reason
-    pairs on any precondition failure. Behaviour is identical to the
-    pre-Step-39 per-format handlers; this function is line-for-line the
-    union of the two.
+    pairs on any precondition failure.
+
+    Step 40 changes vs Step 39: the archive copy is written under
+    ``exports/archive/prospect_brief.v{N}.{fmt}`` in addition to the
+    stable alias, and the manifest entry carries the
+    ``manifest_sha256_at_export`` provenance axis. Idempotent re-renders
+    short-circuit at :func:`upsert_export_entry` and leave the manifest
+    untouched.
     """
     spec: RendererSpec = EXPORT_RENDERERS[fmt]
 
@@ -350,10 +388,11 @@ def _generate_export(
             message=exc.detail or "render failed",
         ) from exc
 
-    # 7. Write atomically: bytes first, then manifest. A crash between
-    #    the two leaves an orphan file (invisible to retrieval because
-    #    the manifest has no entry); the next successful run replaces
-    #    it atomically.
+    # 7. Write atomically: stable alias first (so retrieval can serve
+    #    these bytes immediately), then manifest upsert (which may
+    #    no-op via Step 40 idempotency). The archive copy is written
+    #    AFTER the manifest upsert returns the assigned version — see
+    #    below.
     write_export(job_id, fmt, result.bytes)
 
     generated_at = _iso_utc(datetime.now(timezone.utc))
@@ -368,14 +407,23 @@ def _generate_export(
         "template_version": TEMPLATE_VERSION,
         "renderer": spec.renderer_provenance(),
         "markdown_renderer": spec.markdown_renderer_provenance(),
-        "regeneration_count": 0,  # overwritten by upsert helper.
         "warnings": list(result.warnings),
     }
     if spec.template_sha256 is not None:
         entry["template_sha256"] = spec.template_sha256()
 
-    final_entry = upsert_export_entry(job_id, entry)
-    return final_entry, pre_existed
+    final_entry, was_appended = upsert_export_entry(job_id, entry)
+
+    # 8. Write the per-version archive copy when a new lineage entry
+    #    was created. On idempotent no-op there is nothing new to
+    #    archive — the existing archive entry for the current version
+    #    is already on disk.
+    if was_appended:
+        version_raw = final_entry.get("version")
+        if isinstance(version_raw, int) and version_raw >= 1:
+            write_export_archive(job_id, fmt, version_raw, result.bytes)
+
+    return final_entry, pre_existed, was_appended
 
 
 # ---------------------------------------------------------------------------
@@ -393,9 +441,18 @@ def post_export_pdf(
     _username: str = Depends(current_username),
 ) -> ExportPdfResponse:
     """Render and persist the deterministic PDF for ``job_id``."""
-    final_entry, pre_existed = _generate_export(fmt="pdf", job_id=job_id)
+    final_entry, pre_existed, was_appended = _generate_export(
+        fmt="pdf", job_id=job_id,
+    )
     response.status_code = (
         status.HTTP_200_OK if pre_existed else status.HTTP_201_CREATED
+    )
+    version_value = int(final_entry.get("version", 1) or 1)
+    response.headers["X-Export-Version"] = str(version_value)
+    supersedes_raw = final_entry.get("supersedes")
+    supersedes_value: str | None = (
+        supersedes_raw if isinstance(supersedes_raw, str) and supersedes_raw
+        else None
     )
     return ExportPdfResponse(
         job_id=job_id,
@@ -411,6 +468,13 @@ def post_export_pdf(
         markdown_renderer=dict(final_entry["markdown_renderer"]),
         regeneration_count=int(final_entry["regeneration_count"]),
         warnings=list(final_entry["warnings"]),
+        export_id=str(final_entry.get("export_id") or ""),
+        version=version_value,
+        supersedes=supersedes_value,
+        manifest_sha256_at_export=str(
+            final_entry.get("manifest_sha256_at_export") or ""
+        ),
+        regenerated=bool(was_appended),
     )
 
 
@@ -429,9 +493,18 @@ def post_export_docx(
     _username: str = Depends(current_username),
 ) -> ExportDocxResponse:
     """Render and persist the deterministic DOCX for ``job_id``."""
-    final_entry, pre_existed = _generate_export(fmt="docx", job_id=job_id)
+    final_entry, pre_existed, was_appended = _generate_export(
+        fmt="docx", job_id=job_id,
+    )
     response.status_code = (
         status.HTTP_200_OK if pre_existed else status.HTTP_201_CREATED
+    )
+    version_value = int(final_entry.get("version", 1) or 1)
+    response.headers["X-Export-Version"] = str(version_value)
+    supersedes_raw = final_entry.get("supersedes")
+    supersedes_value: str | None = (
+        supersedes_raw if isinstance(supersedes_raw, str) and supersedes_raw
+        else None
     )
     return ExportDocxResponse(
         job_id=job_id,
@@ -448,6 +521,13 @@ def post_export_docx(
         markdown_renderer=dict(final_entry["markdown_renderer"]),
         regeneration_count=int(final_entry["regeneration_count"]),
         warnings=list(final_entry["warnings"]),
+        export_id=str(final_entry.get("export_id") or ""),
+        version=version_value,
+        supersedes=supersedes_value,
+        manifest_sha256_at_export=str(
+            final_entry.get("manifest_sha256_at_export") or ""
+        ),
+        regenerated=bool(was_appended),
     )
 
 
@@ -465,6 +545,14 @@ def _compute_stale_headers(
     Degrades gracefully when the manifest is absent: ``stale=false``,
     no reasons, empty source-sha. This shape was finalised in Step 37
     and is pinned by the per-format ``*_stale_headers`` test modules.
+
+    Step 40 — ``exports[]`` is now append-only. The staleness
+    projection considers the *latest* entry for ``fmt`` (resolved via
+    the manifest's ``latest_export_id`` map when present, falling
+    back to the last entry for that format by array position). Older
+    historical entries are inherently "stale" relative to the current
+    manifest by construction; surfacing them here would yield
+    "Stale: true" on every retrieval after any regeneration.
     """
     stale_value = "false"
     stale_reasons_value = ""
@@ -498,16 +586,7 @@ def _compute_stale_headers(
     if manifest_sha_str:
         source_md_sha_value = manifest_sha_str
 
-    entry: dict[str, Any] | None = None
-    exports = manifest.get("exports")
-    if isinstance(exports, list):
-        for candidate in exports:
-            if (
-                isinstance(candidate, dict)
-                and candidate.get("format") == fmt
-            ):
-                entry = candidate
-                break
+    entry = _latest_export_entry(manifest, fmt)
     if entry is not None:
         entry_lifecycle = compute_export_lifecycle(
             entry,
@@ -528,6 +607,45 @@ def _compute_stale_headers(
     }
 
 
+def _latest_export_entry(
+    manifest: dict[str, Any], fmt: str,
+) -> dict[str, Any] | None:
+    """Return the latest ``exports[]`` entry for ``fmt`` (Step 40).
+
+    Resolution order:
+
+      1. The entry whose ``export_id`` matches the manifest's
+         ``latest_export_id[fmt]`` pointer.
+      2. Failing that, the last entry in ``exports[]`` whose
+         ``format == fmt`` (positional fallback for legacy manifests
+         that have not been projected through the v3 read path).
+      3. ``None`` if no matching entry exists.
+    """
+    exports = manifest.get("exports")
+    if not isinstance(exports, list):
+        return None
+    latest_map = manifest.get("latest_export_id")
+    target_id = None
+    if isinstance(latest_map, dict):
+        target_id_raw = latest_map.get(fmt)
+        if isinstance(target_id_raw, str) and target_id_raw:
+            target_id = target_id_raw
+
+    fallback: dict[str, Any] | None = None
+    for candidate in exports:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("format") != fmt:
+            continue
+        if (
+            target_id is not None
+            and candidate.get("export_id") == target_id
+        ):
+            return candidate
+        fallback = candidate
+    return fallback
+
+
 def _retrieve_export(
     *, fmt: str, job_id: str, request: Request,
 ) -> Response:
@@ -537,6 +655,11 @@ def _retrieve_export(
     provenance, and does NOT mutate ``state.json``. The ETag is
     computed from the on-disk file's sha256 so we can short-circuit
     304s without consulting the manifest.
+
+    Step 40: emits ``X-Export-Version`` reflecting the latest entry's
+    ``version`` for this format (cheap manifest read; falls back to
+    ``1`` if no manifest or no entry exists, so the header is always
+    present and parseable).
     """
     spec: RendererSpec = EXPORT_RENDERERS[fmt]
 
@@ -562,11 +685,30 @@ def _retrieve_export(
     #    auto-regenerate.
     stale_headers = _compute_stale_headers(job_id=job_id, fmt=fmt)
 
+    # 3a. Resolve the version header (Step 40). Reads the manifest in
+    #     a separate try/except so a missing manifest does not 500 the
+    #     retrieval — the alias bytes are still streamable.
+    version_header: str = "1"
+    try:
+        manifest = read_document_manifest(job_id)
+    except JobNotFound:
+        manifest = None
+    if isinstance(manifest, dict):
+        latest_entry = _latest_export_entry(manifest, fmt)
+        if latest_entry is not None:
+            v_raw = latest_entry.get("version")
+            if isinstance(v_raw, int) and v_raw >= 1:
+                version_header = str(v_raw)
+
     # 4. Compute ETag from the bytes.
     etag = f'"{sha256_hex(payload)}"'
 
     if request.headers.get("if-none-match") == etag:
-        headers_304 = {"ETag": etag, **stale_headers}
+        headers_304 = {
+            "ETag": etag,
+            "X-Export-Version": version_header,
+            **stale_headers,
+        }
         return Response(
             status_code=status.HTTP_304_NOT_MODIFIED, headers=headers_304,
         )
@@ -577,6 +719,7 @@ def _retrieve_export(
         headers={
             "ETag": etag,
             "Content-Disposition": f'inline; filename="{spec.filename}"',
+            "X-Export-Version": version_header,
             **stale_headers,
         },
     )

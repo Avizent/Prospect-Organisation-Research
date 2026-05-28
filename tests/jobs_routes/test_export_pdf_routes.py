@@ -118,15 +118,53 @@ def test_post_returns_200_on_regeneration_and_bumps_count(
     authed_client: TestClient,
     approved_job_ready_for_export: str,
 ) -> None:
+    """Step 40 — append-only lineage with deterministic idempotency.
+
+    The PDF renderer is byte-deterministic over a fixed (markdown,
+    sha) input, so repeated POSTs with the same source must NOT append
+    new lineage entries; ``regeneration_count`` stays at 0 and
+    ``regenerated`` is ``False`` on the no-op calls. The 200 status on
+    r2/r3 reflects "alias file pre-existed" (idempotent retrieval
+    semantics), which is independent of whether the lineage advanced.
+
+    To exercise an actual append we mutate the source markdown between
+    calls and refresh the manifest's recorded ``markdown_sha256`` so
+    the precondition check still passes — only then does the renderer
+    produce different bytes, the new entry appends, and the counter
+    bumps to 1.
+    """
     job_id = approved_job_ready_for_export
     r1 = authed_client.post(_post_path(job_id))
     assert r1.status_code == 201
+    assert r1.json()["regeneration_count"] == 0
+    assert r1.json()["regenerated"] is True
+    assert r1.json()["version"] == 1
+
     r2 = authed_client.post(_post_path(job_id))
     assert r2.status_code == 200
-    assert r2.json()["regeneration_count"] == 1
+    # Same source → same bytes → idempotent no-op under Step 40.
+    assert r2.json()["regeneration_count"] == 0
+    assert r2.json()["regenerated"] is False
+    assert r2.json()["version"] == 1
+
+    # Mutate the source so the renderer produces different bytes; the
+    # manifest's recorded markdown_sha256 must follow or the
+    # markdown_drift precondition would 400.
+    new_md = _MARKDOWN_TEXT + "\nAnother paragraph.\n"
+    new_sha = hashlib.sha256(new_md.encode("utf-8")).hexdigest()
+    write_prospect_brief_markdown(job_id, new_md)
+    manifest_path = job_folder(job_id) / "document_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["markdown_sha256"] = new_sha
+    manifest["markdown_byte_length"] = len(new_md.encode("utf-8"))
+    write_document_manifest(job_id, manifest)
+
     r3 = authed_client.post(_post_path(job_id))
     assert r3.status_code == 200
-    assert r3.json()["regeneration_count"] == 2
+    assert r3.json()["regeneration_count"] == 1
+    assert r3.json()["regenerated"] is True
+    assert r3.json()["version"] == 2
+    assert r3.json()["supersedes"] == r1.json()["sha256"]
 
 
 def test_post_writes_pdf_and_manifest_entry(

@@ -1,20 +1,26 @@
-"""Tests for the Step 36 export storage helpers.
+"""Tests for the Step 36 / 40 export storage helpers.
 
-The new helpers under :mod:`backend.jobs.storage`:
+The helpers under :mod:`backend.jobs.storage`:
 
   - :func:`write_export` / :func:`read_export_bytes` /
-    :func:`export_path_for` — file-level I/O for the new
+    :func:`export_path_for` — file-level I/O for the stable-alias
     ``exports/{filename}`` artefacts.
-  - :func:`upsert_export_entry` — manifest-level upsert that
-    maintains the v2 ``exports[]`` invariants:
+  - :func:`upsert_export_entry` — manifest-level append-only lineage
+    that maintains the v3 ``exports[]`` invariants (Step 40):
 
-      * one entry per ``format`` token;
-      * ``regeneration_count`` increments on replace, starts at 0 on
-        insert;
-      * v1 manifests are silently migrated to v2 by adding
-        ``exports: []`` (the assembler already writes v2 on every
-        fresh run; this branch protects against a half-migrated
-        folder produced by an older build).
+      * entries are append-only and immutable; replace-in-place is
+        gone, each render appends a new lineage entry;
+      * ``version`` is monotonic per (job_id, format), starting at 1;
+      * ``supersedes`` points at the prior latest ``export_id`` (or
+        ``None`` on v1);
+      * ``manifest_sha256_at_export`` captures the input manifest's
+        SHA-256;
+      * ``regeneration_count = version - 1`` (derived, persisted for
+        Step 36/38 wire-compat);
+      * idempotency: a re-render whose ``sha256`` matches the current
+        ``latest_export_id[fmt]`` is a no-op (``was_appended=False``);
+      * v1/v2 manifests are lazily projected to v3 on read and
+        materialised on the next write.
 """
 
 from __future__ import annotations
@@ -149,21 +155,37 @@ def test_upsert_inserts_entry_on_first_call(
         "template_version": "0.1.0",
         "renderer": {"name": "weasyprint", "version": "68.1"},
         "markdown_renderer": {"name": "markdown", "version": "3.10.2"},
-        "regeneration_count": 0,
         "warnings": [],
     }
-    final = upsert_export_entry(job_id, entry)
+    final, was_appended = upsert_export_entry(job_id, entry)
+    assert was_appended is True
     assert final["regeneration_count"] == 0
+    assert final["version"] == 1
+    assert final["export_id"] == "f" * 64
+    assert final["supersedes"] is None
+    # manifest_sha256_at_export captures the v2 manifest's input bytes;
+    # it must be a 64-char hex digest (or empty if the manifest could
+    # not be read, which is not the case here).
+    assert isinstance(final["manifest_sha256_at_export"], str)
+    assert len(final["manifest_sha256_at_export"]) == 64
 
     manifest = read_document_manifest(job_id)
+    assert manifest["schema_version"] == 3
     assert len(manifest["exports"]) == 1
     assert manifest["exports"][0]["format"] == "pdf"
     assert manifest["exports"][0]["sha256"] == "f" * 64
+    assert manifest["exports"][0]["version"] == 1
+    assert manifest["latest_export_id"]["pdf"] == "f" * 64
 
 
-def test_upsert_replaces_entry_and_increments_regeneration_count(
+def test_upsert_appends_new_entry_on_regeneration_with_new_bytes(
     isolated_jobs_root: Path,
 ) -> None:
+    """Step 40 — ``exports[]`` is append-only. A second render with
+    different bytes appends a NEW entry; it does not replace.
+    ``regeneration_count`` is derived as ``version - 1``, so the new
+    entry reports 1 while the prior entry stays untouched at 0.
+    """
     job_id = _new_job_id()
     write_document_manifest(job_id, _v2_manifest(job_id))
     base = {
@@ -177,27 +199,76 @@ def test_upsert_replaces_entry_and_increments_regeneration_count(
         "template_version": "0.1.0",
         "renderer": {"name": "weasyprint", "version": "68.1"},
         "markdown_renderer": {"name": "markdown", "version": "3.10.2"},
-        "regeneration_count": 0,
         "warnings": [],
     }
-    upsert_export_entry(job_id, base)
-    second = dict(base)
-    second["sha256"] = "e" * 64
-    final = upsert_export_entry(job_id, second)
-    assert final["regeneration_count"] == 1
+    first, first_appended = upsert_export_entry(job_id, base)
+    assert first_appended is True
+    second_input = dict(base)
+    second_input["sha256"] = "e" * 64
+    second, second_appended = upsert_export_entry(job_id, second_input)
+    assert second_appended is True
+    assert second["regeneration_count"] == 1
+    assert second["version"] == 2
+    assert second["export_id"] == "e" * 64
+    assert second["supersedes"] == "f" * 64
 
-    # Still exactly one entry — the upsert replaces, never appends.
+    # Append-only: BOTH entries are on disk; the older entry is left
+    # strictly unchanged.
+    manifest = read_document_manifest(job_id)
+    assert len(manifest["exports"]) == 2
+    assert manifest["exports"][0]["sha256"] == "f" * 64
+    assert manifest["exports"][0]["version"] == 1
+    assert manifest["exports"][0]["supersedes"] is None
+    assert manifest["exports"][0]["regeneration_count"] == 0
+    assert manifest["exports"][1]["sha256"] == "e" * 64
+    assert manifest["exports"][1]["version"] == 2
+    assert manifest["exports"][1]["supersedes"] == "f" * 64
+    assert manifest["exports"][1]["regeneration_count"] == 1
+    assert manifest["latest_export_id"]["pdf"] == "e" * 64
+
+
+def test_upsert_is_idempotent_when_sha_matches_latest(
+    isolated_jobs_root: Path,
+) -> None:
+    """Step 40 idempotency — re-rendering identical bytes is a no-op.
+
+    The same entry (same ``sha256``) returned twice must not produce
+    a second ``exports[]`` entry; ``was_appended`` is ``False`` and
+    the existing entry is returned verbatim.
+    """
+    job_id = _new_job_id()
+    write_document_manifest(job_id, _v2_manifest(job_id))
+    entry = {
+        "format": "pdf",
+        "filename": "prospect_brief.pdf",
+        "byte_length": 1024,
+        "sha256": "f" * 64,
+        "source_markdown_sha256": "a" * 64,
+        "generated_at": "2026-05-28T00:00:00Z",
+        "exporter_version": "0.2.0",
+        "template_version": "0.1.0",
+        "renderer": {"name": "weasyprint", "version": "68.1"},
+        "markdown_renderer": {"name": "markdown", "version": "3.10.2"},
+        "warnings": [],
+    }
+    first, first_appended = upsert_export_entry(job_id, entry)
+    second, second_appended = upsert_export_entry(job_id, dict(entry))
+    assert first_appended is True
+    assert second_appended is False
+    assert second["export_id"] == first["export_id"]
+    assert second["version"] == 1
+
     manifest = read_document_manifest(job_id)
     assert len(manifest["exports"]) == 1
-    assert manifest["exports"][0]["sha256"] == "e" * 64
-    assert manifest["exports"][0]["regeneration_count"] == 1
 
 
-def test_upsert_migrates_v1_manifest_to_v2(
+def test_upsert_migrates_legacy_manifest_to_v3(
     isolated_jobs_root: Path,
 ) -> None:
     """A pre-Step-35 manifest on disk has ``schema_version=1`` and no
-    ``exports`` key. The upsert helper migrates additively."""
+    ``exports`` key. Step 40 lazily projects to v3 on read and
+    materialises v3 on the first upsert.
+    """
     job_id = _new_job_id()
     write_document_manifest(job_id, {**_V1_MANIFEST, "job_id": job_id})
     entry = {
@@ -211,15 +282,15 @@ def test_upsert_migrates_v1_manifest_to_v2(
         "template_version": "0.1.0",
         "renderer": {"name": "weasyprint", "version": "68.1"},
         "markdown_renderer": {"name": "markdown", "version": "3.10.2"},
-        "regeneration_count": 0,
         "warnings": [],
     }
     upsert_export_entry(job_id, entry)
 
     manifest = read_document_manifest(job_id)
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert "exports" in manifest
     assert len(manifest["exports"]) == 1
+    assert manifest["latest_export_id"]["pdf"] == "0" * 64
 
 
 def test_upsert_preserves_all_non_exports_manifest_fields(

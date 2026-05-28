@@ -3,9 +3,13 @@
 The PDF export pipeline must only mutate two on-disk artefacts:
 
   * ``exports/prospect_brief.pdf``       — the new PDF file.
-  * ``document_manifest.json``           — only the ``exports`` array
-                                            and the ``schema_version``
-                                            field on a v1→v2 migration.
+  * ``document_manifest.json``           — only the ``exports`` array,
+                                            the ``schema_version`` field
+                                            on a v1→v2 / v2→v3 migration,
+                                            and (Step 40) the
+                                            ``latest_export_id`` lineage
+                                            pointer map plus the
+                                            per-version archive copy.
 
 It must NOT modify:
 
@@ -157,11 +161,25 @@ def test_pdf_export_does_not_mutate_markdown_or_manifest_except_exports_array(
     assert len(manifest_after["exports"]) == 1
     assert manifest_after["exports"][0]["format"] == "pdf"
 
-    # No new top-level keys appeared.
+    # Step 40 — the only new top-level key the export pipeline is
+    # allowed to add is the ``latest_export_id`` lineage pointer map.
+    # Any other key counts as scope-creep and fails the test.
     new_keys = set(manifest_after) - set(manifest_before_parsed)
-    assert new_keys == set(), (
-        f"export pipeline added unexpected manifest keys: {new_keys}"
+    assert new_keys <= {"latest_export_id"}, (
+        f"export pipeline added unexpected manifest keys: "
+        f"{new_keys - {'latest_export_id'}}"
+    )
+    # Positive shape: the lineage pointer must point at the new entry.
+    assert (
+        manifest_after["latest_export_id"]["pdf"]
+        == manifest_after["exports"][0]["sha256"]
     )
 
     # The PDF file was created.
     assert (folder / "exports" / "prospect_brief.pdf").exists()
+    # NB: the per-version archive copy (``exports/archive/...``) is a
+    # route-layer concern — this test exercises the
+    # renderer + storage helpers directly and so does not produce one.
+    # The route-level isolation contract is pinned in the per-format
+    # ``test_export_pdf_routes.py`` / ``test_export_docx_routes.py``
+    # modules.
