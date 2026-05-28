@@ -2,13 +2,22 @@
  * Job status screen — GET /api/jobs/{id}.
  *
  * Shows the current job state, the on-disk transition history, the
- * recorded last_error (if any), which artefacts are present on disk
- * (research_dossier / contacts / needs_assessment / briefing), and
- * a link to the briefing inspector when one is available.
+ * recorded last_error (if any), which artefacts are present on disk,
+ * and a link to the briefing inspector when one is available.
+ *
+ * Artefacts rendered (one row per key in `available_artefacts`):
+ *   Stage 1 — research_dossier, contacts, needs_assessment, briefing
+ *   Stage 2 — product_mapping, benefits, faq, objections, critic_report
+ *
+ * The renderer iterates `available_artefacts` generically; new keys
+ * added by future steps appear automatically as long as the backend
+ * exposes a matching `GET /api/jobs/{id}/artefacts/<kebab-case>` route
+ * (`briefing` is the documented exception — it lives at
+ * `/api/jobs/{id}/briefing`, not under `/artefacts/`).
  *
  * Artefact links open JSON in a new tab via the backend route; the
- * inspector does not pretty-render the dossier/contacts/needs JSON
- * itself in step 12 — that's a step 16 polish concern.
+ * inspector does not pretty-render any artefact JSON itself — pretty
+ * rendering is deferred to a later step.
  */
 
 import { api, ApiError } from "../api.js";
