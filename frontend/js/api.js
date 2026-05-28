@@ -26,7 +26,7 @@ class ApiError extends Error {
   }
 }
 
-async function request(method, path, { json, form } = {}) {
+async function request(method, path, { json, form, returnStatus = false } = {}) {
   const init = {
     method,
     credentials: "same-origin",
@@ -64,6 +64,13 @@ async function request(method, path, { json, form } = {}) {
   if (!res.ok) {
     throw new ApiError(`HTTP ${res.status}`, { status: res.status, detail });
   }
+  // Opt-in: callers that need to distinguish 200 vs 201 (e.g. Step 33's
+  // brief-assembly button, which surfaces "assembled" vs "re-assembled"
+  // copy) pass ``returnStatus: true`` and receive ``{ status, body }``
+  // instead of just the parsed body. Existing callers are unchanged.
+  if (returnStatus) {
+    return { status: res.status, body };
+  }
   return body;
 }
 
@@ -100,6 +107,16 @@ const api = {
   getProspectBriefMarkdown: (id) =>
     request("GET",
       `/api/jobs/${encodeURIComponent(id)}/brief/markdown`),
+
+  // Step 33: explicit Markdown brief assembly trigger. Returns
+  // ``{ status, body }`` because the operator-facing toast copy
+  // distinguishes 201 ("Brief assembled") from 200
+  // ("Brief re-assembled") — the body shape is identical on both
+  // codes and matches Step 32's ``AssembleBriefResponse``.
+  assembleBrief: (id) =>
+    request("POST",
+      `/api/jobs/${encodeURIComponent(id)}/brief/assemble`,
+      { returnStatus: true }),
 
   // Stage 2 run — POST starts the orchestrator on an approved job.
   // The route returns 503 unless the opt-in fake runtime is wired

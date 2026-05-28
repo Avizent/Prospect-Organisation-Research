@@ -49,6 +49,7 @@ _REQUIRED_METHODS = (
     "completeRegeneration",
     "failRegeneration",
     "runStage2",
+    "assembleBrief",
 )
 
 
@@ -90,6 +91,7 @@ _REQUIRED_PATHS = (
     "/approval/regenerate/complete",
     "/approval/regenerate/fail",
     "/stage2/run",
+    "/brief/assemble",
 )
 
 
@@ -114,6 +116,7 @@ def test_uses_post_for_state_changing_routes(src: str) -> None:
         "completeRegeneration",
         "failRegeneration",
         "runStage2",
+        "assembleBrief",
     ):
         m = re.search(
             rf'{method}:.*request\("POST"', src, flags=re.DOTALL

@@ -52,6 +52,112 @@ function _renderStage2Status(node, kind, message) {
   node.appendChild(el("p", { text: message }));
 }
 
+// ---------------------------------------------------------------------------
+// Assemble Brief control (Step 33)
+// ---------------------------------------------------------------------------
+//
+// The button is rendered only when:
+//   - ``snapshot.current_state === "approved"`` (state precondition), AND
+//   - ``snapshot.available_artefacts.critic_report === true`` (inputs ready).
+//
+// The "Stage 2 artefacts present" and "assembled Markdown present" flags
+// are deliberately treated as orthogonal — first-time assembly flips
+// ``prospect_brief`` from false to true while leaving ``critic_report``
+// unchanged. Re-assembly leaves both true. The button's label reflects
+// which case we're in:
+//   - "Assemble Brief"    when ``prospect_brief`` is absent
+//   - "Re-assemble Brief" when ``prospect_brief`` is present
+//
+// On success the handler does NOT auto-navigate to the brief viewer —
+// the operator stays on the inspector page. The "View Brief" link
+// appears (or refreshes) via the next ``render()``'s generic
+// available_artefacts loop. Step 32's response distinguishes 201 (file
+// created) from 200 (file overwritten); the toast copy mirrors that
+// distinction via ``api.assembleBrief``'s ``{ status, body }`` shape.
+
+async function _onAssembleBrief(container, params, button, statusNode) {
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Assembling…";
+  _renderAssemblyStatus(statusNode, "info", "Assembling Markdown brief…");
+  try {
+    const result = await api.assembleBrief(params.id);
+    const verb =
+      result.status === 201 ? "Brief assembled" : "Brief re-assembled";
+    const sha = (result.body && result.body.markdown_sha256) || "";
+    const message = sha
+      ? `${verb} (${sha.slice(0, 12)})`
+      : verb;
+    toast(message, { kind: "success" });
+    // Re-render the inspector so the ``prospect_brief`` artefact row
+    // and its "View Brief" link appear via the generic
+    // available_artefacts loop. We deliberately do NOT navigate to
+    // the brief viewer — the operator stays on the inspector page.
+    await render(container, params);
+    return;
+  } catch (err) {
+    button.disabled = false;
+    button.textContent = originalLabel;
+    if (err instanceof ApiError && err.status === 401) {
+      navigate("#/login");
+      return;
+    }
+    if (err instanceof ApiError && err.status === 404) {
+      _renderAssemblyStatus(
+        statusNode, "error", "Job no longer exists.",
+      );
+      toast("Assembly failed: job no longer exists.", { kind: "error" });
+      return;
+    }
+    if (err instanceof ApiError && err.status === 409) {
+      const reason =
+        err.detail && typeof err.detail === "object"
+          ? err.detail.reason
+          : null;
+      if (reason === "state_not_approved") {
+        const currentState =
+          (err.detail && err.detail.current_state) || "unknown";
+        const msg =
+          "Cannot assemble: job is in state " + currentState +
+          ", must be approved.";
+        _renderAssemblyStatus(statusNode, "error", msg);
+        toast(msg, { kind: "error" });
+        return;
+      }
+      if (reason === "missing_critic_report") {
+        const msg =
+          "Cannot assemble: critic report missing. Re-run Stage 2.";
+        _renderAssemblyStatus(statusNode, "error", msg);
+        toast(msg, { kind: "error" });
+        return;
+      }
+      const msg = "Assembly failed (HTTP 409): " + formatDetail(err.detail);
+      _renderAssemblyStatus(statusNode, "error", msg);
+      toast(msg, { kind: "error" });
+      return;
+    }
+    if (err instanceof ApiError) {
+      const msg =
+        "Assembly failed (HTTP " + err.status + "): " +
+        formatDetail(err.detail);
+      _renderAssemblyStatus(statusNode, "error", msg);
+      toast(msg, { kind: "error" });
+      return;
+    }
+    const msg =
+      "Assembly failed: " + (err && err.message ? err.message : String(err));
+    _renderAssemblyStatus(statusNode, "error", msg);
+    toast(msg, { kind: "error" });
+  }
+}
+
+function _renderAssemblyStatus(node, kind, message) {
+  clear(node);
+  node.dataset.kind = kind;
+  node.appendChild(el("p", { text: message }));
+}
+
+
 async function _onRunStage2(container, params, button, statusNode) {
   button.disabled = true;
   const originalLabel = button.textContent;
@@ -177,6 +283,7 @@ export async function render(container, params) {
   // The button is the inspector's sole entry point to the Stage 2
   // route; everything else on this screen is read-only.
   let stage2Status = null;
+  let assemblyStatus = null;
   if (snapshot.current_state === "approved") {
     const stage2Button = el("button", {
       class: "btn btn-primary",
@@ -190,6 +297,31 @@ export async function render(container, params) {
       _onRunStage2(container, params, stage2Button, stage2Status);
     });
     actions.appendChild(stage2Button);
+
+    // Step 33: Assemble Brief control. Only rendered when the Stage 2
+    // inputs are on disk (critic_report) so the backend route has a
+    // chance of succeeding. The label flips between first-time and
+    // re-assembly based on whether ``prospect_brief`` is already
+    // present — the request body and handler logic are identical.
+    if (artefacts.critic_report) {
+      const alreadyAssembled = !!artefacts.prospect_brief;
+      const assembleButton = el("button", {
+        class: "btn btn-secondary",
+        type: "button",
+        text: alreadyAssembled ? "Re-assemble Brief" : "Assemble Brief",
+      });
+      assemblyStatus = el("div", {
+        class: "assembly-status",
+        role: "status",
+        "aria-live": "polite",
+      });
+      assembleButton.addEventListener("click", () => {
+        _onAssembleBrief(
+          container, params, assembleButton, assemblyStatus,
+        );
+      });
+      actions.appendChild(assembleButton);
+    }
   }
 
   actions.appendChild(el("a", {
@@ -239,6 +371,7 @@ export async function render(container, params) {
   container.appendChild(artefactList);
   container.appendChild(actions);
   if (stage2Status) container.appendChild(stage2Status);
+  if (assemblyStatus) container.appendChild(assemblyStatus);
   container.appendChild(transitions);
   if (lastError) container.appendChild(lastError);
 }
