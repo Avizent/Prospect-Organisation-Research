@@ -37,6 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.admin.routes import router as admin_router
 from backend.auth.routes import router as auth_router
 from backend.jobs.routes import router as jobs_router
+from backend.jobs.stage2_routes import router as stage2_router
 
 
 def _run_migrations() -> None:
@@ -64,6 +65,7 @@ app = FastAPI(
 app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(jobs_router, prefix="/api/jobs")
+app.include_router(stage2_router, prefix="/api/jobs")
 
 
 @app.get("/health")
