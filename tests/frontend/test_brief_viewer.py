@@ -27,8 +27,11 @@ that silently broke any of the following would fail here:
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -257,6 +260,51 @@ def test_router_parses_brief_viewer_route(util_src: str) -> None:
     assert '"brief_viewer"' in util_src, (
         "util.parseRoute must return name 'brief_viewer' for the brief route"
     )
+
+
+def test_parse_route_runtime_resolves_brief_viewer() -> None:
+    """End-to-end proof that ``parseRoute`` actually returns
+    ``brief_viewer`` at runtime — guards against a silent regex
+    skew between the source-scan test above and the executed
+    code path. Requires ``node`` on PATH; skipped otherwise so
+    CI runners without Node don't fail this suite.
+    """
+    node = shutil.which("node")
+    if node is None:  # pragma: no cover - environment guard
+        pytest.skip("node not available — runtime parse check skipped")
+
+    script = (
+        "import('./frontend/js/util.js').then(m => {"
+        "  const cases = ["
+        "    '#/jobs/abc/brief',"
+        "    '#/jobs/abc/briefing',"
+        "    '#/jobs/abc',"
+        "    '#/jobs/abc/unknown',"
+        "  ];"
+        "  console.log(JSON.stringify("
+        "    cases.map(h => [h, m.parseRoute(h)])"
+        "  ));"
+        "});"
+    )
+    out = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        cwd=str(_REPO_ROOT),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    results = dict(json.loads(out.stdout.strip()))
+    assert results["#/jobs/abc/brief"]["name"] == "brief_viewer", (
+        "parseRoute('#/jobs/<id>/brief') must return name='brief_viewer' "
+        f"— got {results['#/jobs/abc/brief']!r}"
+    )
+    assert results["#/jobs/abc/brief"]["params"]["id"] == "abc"
+    # Adjacent routes must still resolve correctly — guards against a
+    # rewrite that accidentally subsumes /briefing or bare /jobs/<id>.
+    assert results["#/jobs/abc/briefing"]["name"] == "briefing"
+    assert results["#/jobs/abc"]["name"] == "job_status"
+    assert results["#/jobs/abc/unknown"]["name"] == "not_found"
 
 
 def test_app_dispatches_brief_viewer_case(app_src: str) -> None:

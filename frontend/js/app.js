@@ -8,6 +8,7 @@
  *   #/jobs/new              -> create a new job
  *   #/jobs/<id>             -> job status
  *   #/jobs/<id>/briefing    -> briefing inspector / approval gate
+ *   #/jobs/<id>/brief       -> read-only Markdown brief viewer (step 31)
  *
  * The bootstrap sequence on every navigation:
  *   1. If the app hasn't been set up, force the user to #/setup.

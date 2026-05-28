@@ -33,6 +33,8 @@ from alembic import command as alembic_command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.types import Scope
 
 from backend.admin.routes import router as admin_router
 from backend.auth.routes import router as auth_router
@@ -93,10 +95,34 @@ def health() -> dict:
 # ---------------------------------------------------------------------------
 # Static frontend mount — must be LAST so the API routers above win.
 # ---------------------------------------------------------------------------
+#
+# Browser-cache-busting note (Step 31 follow-up)
+# ----------------------------------------------
+# The SPA is a graph of ES modules wired by static ``import`` statements
+# (``app.js`` → ``util.js``/``api.js`` → screens). When we ship a fix to
+# the hash router (e.g. a new ``parseRoute`` branch) the browser will
+# happily keep serving a previously-cached ``util.js`` until the user
+# does a hard refresh. Symptom: the new hash route 404s ("No screen
+# for #/...") even though the source on disk is correct.
+#
+# This is a single-user desktop dev tool, so we tell the browser to
+# revalidate every static asset on every navigation. ``no-cache`` does
+# NOT mean "do not cache" — it means "always revalidate with the
+# origin before using a cached copy". When the file is unchanged the
+# server still returns 304 quickly via ``StaticFiles``' built-in
+# ``Last-Modified``/``ETag`` handling, so this is cheap.
+class _NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        if response.status_code < 400:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 _FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 if _FRONTEND_DIR.is_dir():
     app.mount(
         "/",
-        StaticFiles(directory=_FRONTEND_DIR, html=True),
+        _NoCacheStaticFiles(directory=_FRONTEND_DIR, html=True),
         name="frontend",
     )

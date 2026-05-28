@@ -48,8 +48,15 @@ def test_serves_inspector_css(client: TestClient) -> None:
 
 
 def test_serves_screen_modules(client: TestClient) -> None:
-    """All five screens must be reachable as static modules."""
-    for name in ("login", "setup", "new_job", "job_status", "briefing"):
+    """All screens must be reachable as static modules."""
+    for name in (
+        "login",
+        "setup",
+        "new_job",
+        "job_status",
+        "briefing",
+        "brief_viewer",
+    ):
         r = client.get(f"/js/screens/{name}.js")
         assert r.status_code == 200, (name, r.text)
         assert "export" in r.text, name
@@ -76,3 +83,36 @@ def test_api_routes_still_win(client: TestClient) -> None:
 def test_unknown_static_path_404(client: TestClient) -> None:
     r = client.get("/js/does-not-exist.js")
     assert r.status_code == 404
+
+
+def test_static_assets_set_no_cache_header(client: TestClient) -> None:
+    """The static mount must instruct the browser to revalidate every
+    ES module on every navigation.
+
+    Background (Step 31 follow-up): ``app.js`` is a graph of static
+    ``import``s wired in the browser. When we ship a fix to a leaf
+    module like ``util.js`` (e.g. a new ``parseRoute`` branch), an
+    aggressively-cached previous response would keep the hash router
+    returning ``not_found`` for the new route even though the source
+    on disk is correct. Symptom: 'No screen for #/jobs/<id>/brief'.
+
+    ``no-cache`` does NOT disable caching — it forces the browser to
+    revalidate with the origin before serving a cached copy. The
+    underlying ``StaticFiles`` handler still returns 304s cheaply
+    via Last-Modified/ETag when content hasn't changed.
+    """
+    for path in (
+        "/",
+        "/js/app.js",
+        "/js/util.js",
+        "/js/markdown.js",
+        "/js/screens/brief_viewer.js",
+        "/js/screens/job_status.js",
+    ):
+        r = client.get(path)
+        assert r.status_code == 200, (path, r.status_code)
+        cc = r.headers.get("cache-control", "")
+        assert "no-cache" in cc, (
+            f"{path} must include 'no-cache' in Cache-Control "
+            f"so the browser revalidates stale ES modules; got: {cc!r}"
+        )
