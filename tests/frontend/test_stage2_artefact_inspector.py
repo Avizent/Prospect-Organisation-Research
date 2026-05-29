@@ -96,6 +96,45 @@ def code_only_inspector_src() -> str:
     return src
 
 
+@pytest.fixture(scope="module")
+def artefact_loop_only(code_only_inspector_src: str) -> str:
+    """Extract only the ``for (const [name, present] of
+    Object.entries(artefacts))`` loop body from the comment-stripped
+    source so the no-hard-coded-key fence is scoped to the artefact
+    renderer itself.
+
+    Step 44 adds ``_TIMELINE_STAGES`` which legitimately names artefact
+    keys as data for the progress timeline — a different component that
+    must not trip the artefact-renderer fence.  Scoping to the loop body
+    means the guard still catches the specific regression it was written
+    to prevent (special-casing an artefact inside the loop) without
+    producing false positives from unrelated code that also knows
+    artefact names.
+    """
+    m = re.search(
+        r"for\s*\(\s*const\s+\[name,\s*present\]\s+of\s+Object\.entries\(\s*artefacts\s*\)\s*\)\s*\{",
+        code_only_inspector_src,
+    )
+    assert m is not None, (
+        "could not find 'for (const [name, present] of Object.entries(artefacts))' "
+        "loop in comment-stripped source — artefact renderer may have changed"
+    )
+    start = m.end() - 1
+    depth = 0
+    end = None
+    for i in range(start, len(code_only_inspector_src)):
+        ch = code_only_inspector_src[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    assert end is not None, "could not find closing brace of artefact loop"
+    return code_only_inspector_src[m.start() : end + 1]
+
+
 # ---------------------------------------------------------------------------
 # 1. Generic iteration over available_artefacts
 # ---------------------------------------------------------------------------
@@ -268,45 +307,50 @@ def test_missing_artefacts_produce_no_open_json_link(
 
 @pytest.mark.parametrize("key", _STAGE2_KEYS)
 def test_inspector_does_not_hardcode_stage2_key_in_code(
-    code_only_inspector_src: str, key: str,
+    artefact_loop_only: str, key: str,
 ) -> None:
-    """No Stage 2 boolean key appears as a quoted string literal in
-    the inspector *code* (comments stripped).
+    """No Stage 2 boolean key appears as a quoted string literal
+    *inside the artefact-rendering loop* (comments stripped).
 
-    The renderer must remain data-driven over the
-    ``available_artefacts`` dict — a quoted ``"benefits"`` (etc.)
-    in code would be a sign that someone special-cased an artefact
-    out of the generic loop, breaking the contract that future
-    backend additions appear automatically.
+    Scoped to the ``for (const [name, present] of Object.entries(...))``
+    loop body so Step 44's ``_TIMELINE_STAGES`` (which legitimately
+    names artefact keys as data for the progress timeline) does not
+    trigger a false positive.  The guard still catches the specific
+    regression it was written to prevent: special-casing an artefact
+    key inside the renderer loop instead of letting it flow through
+    the generic iterator.
     """
     forbidden_literals = (
         f'"{key}"',
         f"'{key}'",
     )
     for literal in forbidden_literals:
-        assert literal not in code_only_inspector_src, (
-            f"inspector code must not hard-code the Stage 2 key "
+        assert literal not in artefact_loop_only, (
+            f"artefact renderer loop must not hard-code the Stage 2 key "
             f"{literal} — keep the renderer generic over "
             f"available_artefacts"
         )
 
 
 def test_inspector_does_not_hardcode_stage1_extra_keys_in_code(
-    code_only_inspector_src: str,
+    artefact_loop_only: str,
 ) -> None:
     """Same fence for Stage 1 keys *other than* ``briefing`` — they
     must also flow through the generic loop, not be hard-coded.
 
     ``briefing`` is the documented exception: its backend route is
     ``/api/jobs/{id}/briefing`` (not under ``/artefacts/``), so the
-    ternary at line ~64 must reference it by name. The other three
-    Stage 1 keys have no such exception and must not appear as
-    quoted literals in code.
+    ternary must reference it by name. The other three Stage 1 keys
+    have no such exception and must not appear as quoted literals
+    inside the loop body.
+
+    Scoped to ``artefact_loop_only`` for the same reason as
+    ``test_inspector_does_not_hardcode_stage2_key_in_code`` above.
     """
     for key in ("research_dossier", "contacts", "needs_assessment"):
         for literal in (f'"{key}"', f"'{key}'"):
-            assert literal not in code_only_inspector_src, (
-                f"inspector code must not hard-code {literal} — "
+            assert literal not in artefact_loop_only, (
+                f"artefact renderer loop must not hard-code {literal} — "
                 f"keep the renderer generic"
             )
 

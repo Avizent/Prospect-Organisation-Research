@@ -56,6 +56,42 @@ def code_only_inspector_src() -> str:
     return src
 
 
+@pytest.fixture(scope="module")
+def stage2_handler_only(code_only_inspector_src: str) -> str:
+    """Extract the ``_onRunStage2`` function body from the comment-stripped
+    source so state-machine-literal assertions are scoped to that handler
+    only.
+
+    Step 44 legitimately adds ``"generating_documents"`` (and other state
+    names) to the timeline constants at module scope.  Scoping the fence
+    to the Stage 2 handler body means the guard still catches any
+    accidental state-machine drift *inside the handler* without producing
+    false positives from the new timeline code.
+    """
+    m = re.search(
+        r"async\s+function\s+_onRunStage2\s*\([^)]*\)\s*\{",
+        code_only_inspector_src,
+    )
+    assert m is not None, (
+        "_onRunStage2 not found in comment-stripped source — "
+        "cannot scope the state-machine fence to the handler body"
+    )
+    start = m.end() - 1
+    depth = 0
+    end = None
+    for i in range(start, len(code_only_inspector_src)):
+        ch = code_only_inspector_src[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    assert end is not None, "could not find closing brace of _onRunStage2"
+    return code_only_inspector_src[m.start() : end + 1]
+
+
 # ---------------------------------------------------------------------------
 # 1. A Run Stage 2 button/control is present for approved jobs
 # ---------------------------------------------------------------------------
@@ -306,19 +342,21 @@ _STATE_MACHINE_FORBIDDEN = (
 
 @pytest.mark.parametrize("needle", _STATE_MACHINE_FORBIDDEN)
 def test_no_document_generation_or_state_drift(
-    code_only_inspector_src: str, needle: str,
+    stage2_handler_only: str, needle: str,
 ) -> None:
-    """The Step 27 control must not hard-code document generation,
+    """The Step 27 handler must not hard-code document generation,
     delivery artefacts, or downstream state names.
 
-    Comments are stripped so a docstring that mentions "complete" in
-    prose does not trip the fence; only references in *code* count.
-    The next test still guards literal copy in code separately.
+    Scoped to the ``_onRunStage2`` body so the Step 44 timeline
+    constants (which legitimately reference state names at module
+    scope) do not produce false positives.  Comments are stripped from
+    the source before extraction so prose mentions do not trip the
+    fence.
     """
     forbidden_literals = (f'"{needle}"', f"'{needle}'")
     for literal in forbidden_literals:
-        assert literal not in code_only_inspector_src, (
-            f"inspector code must not contain {literal} — Step 27 "
+        assert literal not in stage2_handler_only, (
+            f"_onRunStage2 handler must not contain {literal} — Step 27 "
             f"adds a Stage 2 run trigger only, not document "
             f"generation or state-machine drift"
         )

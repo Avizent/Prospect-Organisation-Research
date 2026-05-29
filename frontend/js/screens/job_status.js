@@ -268,7 +268,143 @@ async function _onGenerateDocuments(container, params, button, statusNode) {
 }
 
 
+// ---------------------------------------------------------------------------
+// Step 44 — job progress timeline
+// ---------------------------------------------------------------------------
+
+// States in which the job is actively running and the timeline should poll.
+// Terminal states (complete, failed) and human-gated states (briefing_ready,
+// user_editing, regenerating_section, approved) are excluded — they need no
+// automatic refresh.
+const _ACTIVE_STATES = new Set([
+  "created",
+  "researching",
+  "generating_documents",
+]);
+
+// Polling cadence in milliseconds. setTimeout is used so a slow response
+// never queues a second in-flight request.
+const _POLL_INTERVAL_MS = 4000;
+
+// Navigation guard — incremented each time render() is called; each polling
+// closure captures the value at the time it was created, and drops the tick
+// if the value has changed (meaning the user navigated away or re-rendered).
+let _timelineGeneration = 0;
+
+// Conservative elapsed-time ranges (minutes) for each artefact stage.
+// Used only to produce approximate "about N–M min" estimates; never shown
+// as exact countdowns or percentages.
+const _STAGE_DURATIONS = {
+  research_dossier:   [1, 3],
+  contacts:           [1, 2],
+  needs_assessment:   [1, 2],
+  product_mapping:    [1, 3],
+  critic_report:      [1, 2],
+  briefing:           [1, 2],
+  prospect_brief:     [1, 2],
+  document_manifest:  [1, 2],
+};
+
+const _TS_PENDING = "pending";
+const _TS_DONE    = "done";
+const _TS_ACTIVE  = "active";
+
+// Ordered list of displayable pipeline stages. Each entry maps an artefact
+// key (as returned by /api/jobs/{id}/status) to a human-readable label.
+const _TIMELINE_STAGES = [
+  { key: "research_dossier",  label: "Research dossier" },
+  { key: "contacts",          label: "Contacts" },
+  { key: "needs_assessment",  label: "Needs assessment" },
+  { key: "product_mapping",   label: "Product mapping" },
+  { key: "critic_report",     label: "Critic report" },
+  { key: "briefing",          label: "Briefing" },
+  { key: "prospect_brief",    label: "Prospect brief" },
+  { key: "document_manifest", label: "Documents" },
+];
+
+// Derive per-stage completion status from the snapshot's available_artefacts
+// map. The first incomplete stage in an active job is marked _TS_ACTIVE; all
+// earlier incomplete stages would not be reachable (shouldn't occur in
+// practice, but are marked pending defensively).
+function _computeStages(snapshot) {
+  const artefacts = snapshot.available_artefacts || {};
+  const isActive = _ACTIVE_STATES.has(snapshot.current_state);
+  let seenIncomplete = false;
+  return _TIMELINE_STAGES.map(stage => {
+    if (artefacts[stage.key]) {
+      return { ...stage, status: _TS_DONE };
+    }
+    if (!seenIncomplete && isActive) {
+      seenIncomplete = true;
+      return { ...stage, status: _TS_ACTIVE };
+    }
+    seenIncomplete = true;
+    return { ...stage, status: _TS_PENDING };
+  });
+}
+
+// Produce an approximate ETA string for active jobs by summing the
+// conservative duration ranges of all incomplete stages. Returns null for
+// terminal or human-gated states, and null if all stages are already done.
+function _computeEta(snapshot, stages) {
+  if (!_ACTIVE_STATES.has(snapshot.current_state)) return null;
+  let minTotal = 0;
+  let maxTotal = 0;
+  for (const stage of stages) {
+    if (stage.status !== _TS_DONE) {
+      const [mn, mx] = _STAGE_DURATIONS[stage.key] || [1, 2];
+      minTotal += mn;
+      maxTotal += mx;
+    }
+  }
+  if (minTotal === 0 && maxTotal === 0) return null;
+  return `about ${minTotal}–${maxTotal} min`;
+}
+
+// Render the progress timeline section. Returns a <section> element with
+// class "job-progress-timeline". For active jobs the section also shows an
+// approximate ETA and an honest-approximation caveat.
+function _renderProgressTimeline(snapshot) {
+  const stages = _computeStages(snapshot);
+  const isActive = _ACTIVE_STATES.has(snapshot.current_state);
+  const eta = _computeEta(snapshot, stages);
+
+  const items = stages.map(stage => {
+    const icon = stage.status === _TS_DONE   ? "✓"
+               : stage.status === _TS_ACTIVE ? "…"
+               : "·";
+    return el("li", { class: `timeline-item timeline-item--${stage.status}` }, [
+      el("span", { class: "timeline-icon", text: icon }),
+      el("span", { class: "timeline-label", text: stage.label }),
+    ]);
+  });
+
+  const children = [
+    el("h3", { text: "Progress" }),
+    el("ul", { class: "progress-timeline" }, items),
+  ];
+
+  if (isActive) {
+    const etaText = eta !== null ? eta : "calculating…";
+    children.push(el("p", {
+      class: "timeline-eta",
+      text: `Estimated time remaining: ${etaText}`,
+    }));
+    children.push(el("p", {
+      class: "timeline-caveat muted",
+      text: "Progress is approximate — inferred from artefact availability, not live agent events.",
+    }));
+  }
+
+  return el("section", {
+    class: "job-progress-timeline",
+    "aria-label": "Job progress",
+  }, children);
+}
+
+
 export async function render(container, params) {
+  const generation = ++_timelineGeneration;
   const id = params.id;
   clear(container);
   container.appendChild(el("p", { text: "Loading job…" }));
@@ -476,6 +612,7 @@ export async function render(container, params) {
     : null;
 
   container.appendChild(header);
+  container.appendChild(_renderProgressTimeline(snapshot));
   container.appendChild(el("h3", { text: "Artefacts on disk" }));
   container.appendChild(artefactList);
   container.appendChild(actions);
@@ -484,4 +621,15 @@ export async function render(container, params) {
   if (generateDocsStatus) container.appendChild(generateDocsStatus);
   container.appendChild(transitions);
   if (lastError) container.appendChild(lastError);
+
+  // Poll while the job is in an active (running) state. setTimeout is used
+  // so a slow response never queues a second in-flight request. The
+  // generation guard ensures we stop polling if the
+  // user navigated away or triggered a fresh render before the tick fires.
+  if (_ACTIVE_STATES.has(snapshot.current_state)) {
+    setTimeout(async () => {
+      if (_timelineGeneration !== generation) return;
+      await render(container, params);
+    }, _POLL_INTERVAL_MS);
+  }
 }
