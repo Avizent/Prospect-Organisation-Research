@@ -199,9 +199,9 @@ def test_overall_bar_has_max_100(timeline_body: str) -> None:
 
 
 def test_overall_bar_class_present(timeline_body: str) -> None:
-    """The overall bar must carry the ``timeline-overall-bar`` class."""
-    assert "timeline-overall-bar" in timeline_body, (
-        "_renderProgressTimeline must apply class 'timeline-overall-bar' "
+    """The overall bar must carry the ``progress-overall-bar`` class."""
+    assert "progress-overall-bar" in timeline_body, (
+        "_renderProgressTimeline must apply class 'progress-overall-bar' "
         "to the overall progress element"
     )
 
@@ -209,8 +209,8 @@ def test_overall_bar_class_present(timeline_body: str) -> None:
 def test_overall_bar_failed_class_present(timeline_body: str) -> None:
     """A failed-state variant class must be applied to the overall bar
     when the job is in the failed state."""
-    assert "timeline-overall-bar--failed" in timeline_body, (
-        "_renderProgressTimeline must apply 'timeline-overall-bar--failed' "
+    assert "progress-overall-bar--failed" in timeline_body, (
+        "_renderProgressTimeline must apply 'progress-overall-bar--failed' "
         "class when the job has failed"
     )
 
@@ -270,10 +270,10 @@ def test_compute_overall_progress_called_in_timeline(
 
 def test_per_stage_bar_base_class(timeline_body: str) -> None:
     """Each stage row must include an element with the base
-    ``timeline-bar`` class."""
-    assert "timeline-bar" in timeline_body, (
+    ``progress-stage-bar`` class."""
+    assert "progress-stage-bar" in timeline_body, (
         "_renderProgressTimeline must create per-stage elements with "
-        "class 'timeline-bar'"
+        "class 'progress-stage-bar'"
     )
 
 
@@ -283,11 +283,11 @@ def test_per_stage_bar_uses_status_template(timeline_body: str) -> None:
     proof that each ``_TS_*`` constant maps to a CSS class without
     requiring redundant hard-coded per-status branches."""
     assert re.search(
-        r"timeline-bar\s+timeline-bar--\$\{stage\.status\}",
+        r"progress-stage-bar\s+progress-stage-bar--\$\{stage\.status\}",
         timeline_body,
     ), (
         "_renderProgressTimeline must build per-stage bar class via "
-        "``timeline-bar timeline-bar--${stage.status}`` template literal"
+        "``progress-stage-bar progress-stage-bar--${stage.status}`` template literal"
     )
 
 
@@ -316,7 +316,7 @@ def test_ts_constant_value(inspector_src: str, constant: str,
         inspector_src,
     ), (
         f"{constant} must be assigned the string \"{expected_value}\" "
-        f"so the template literal produces class 'timeline-bar--{expected_value}'"
+        f"so the template literal produces class 'progress-stage-bar--{expected_value}'"
     )
 
 
@@ -325,11 +325,11 @@ def test_per_stage_bar_uses_div_not_progress(timeline_body: str) -> None:
     so indeterminate animation is applied via CSS class without
     conflicting with the overall ``<progress>`` element."""
     assert re.search(
-        r'el\(\s*"div"\s*,\s*\{[^}]*timeline-bar',
+        r'el\(\s*"div"\s*,\s*\{[^}]*progress-stage-bar',
         timeline_body,
         flags=re.DOTALL,
     ), (
-        "per-stage bars must be el(\"div\", { class: '...timeline-bar...' })"
+        "per-stage bars must be el(\"div\", { class: '...progress-stage-bar...' })"
     )
 
 
@@ -396,10 +396,9 @@ def test_eta_label_retained(timeline_body: str) -> None:
 
 
 def test_caveat_retained(timeline_body: str) -> None:
-    """The Step 44 honest-approximation caveat must remain present."""
-    assert "inferred from artefact availability" in timeline_body, (
-        "Step 44 honest-approximation caveat must not be removed by "
-        "Step 45"
+    """The honest-approximation caveat must remain present."""
+    assert "inferred from completed outputs" in timeline_body, (
+        "honest-approximation caveat must not be removed"
     )
 
 

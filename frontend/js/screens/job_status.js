@@ -269,10 +269,10 @@ async function _onGenerateDocuments(container, params, button, statusNode) {
 
 
 // ---------------------------------------------------------------------------
-// Step 44 — job progress timeline
+// Step 44/45 — job progress dashboard
 // ---------------------------------------------------------------------------
 
-// States in which the job is actively running and the timeline should poll.
+// States in which the job is actively running and the dashboard should poll.
 // Terminal states (complete, failed) and human-gated states (briefing_ready,
 // user_editing, regenerating_section, approved) are excluded — they need no
 // automatic refresh.
@@ -291,18 +291,18 @@ const _POLL_INTERVAL_MS = 4000;
 // if the value has changed (meaning the user navigated away or re-rendered).
 let _timelineGeneration = 0;
 
-// Conservative elapsed-time ranges (minutes) for each artefact stage.
-// Used only to produce approximate "about N–M min" estimates; never shown
-// as exact countdowns or percentages.
+// Conservative elapsed-time ranges (minutes) for each artefact key.
+// Used only to produce approximate "about N–M min" ETA estimates; never
+// shown as exact countdowns or per-stage percentages.
+//   briefing duration covers product mapping + critic analysis + assembly.
+//   document_manifest duration covers both PDF and DOCX export.
 const _STAGE_DURATIONS = {
   research_dossier:   [1, 3],
   contacts:           [1, 2],
   needs_assessment:   [1, 2],
-  product_mapping:    [1, 3],
-  critic_report:      [1, 2],
-  briefing:           [1, 2],
+  briefing:           [3, 7],
   prospect_brief:     [1, 2],
-  document_manifest:  [1, 2],
+  document_manifest:  [2, 4],
 };
 
 const _TS_PENDING = "pending";
@@ -312,8 +312,7 @@ const _TS_WAITING = "waiting";
 const _TS_FAILED  = "failed";
 
 // Human-gated states — the pipeline is paused waiting for operator action.
-// Incomplete stages in these states show a waiting/paused bar rather than
-// an indeterminate active one.
+// The approval-gate stage shows as _TS_WAITING in these states.
 const _WAITING_STATES = new Set([
   "briefing_ready",
   "user_editing",
@@ -321,43 +320,80 @@ const _WAITING_STATES = new Set([
   "approved",
 ]);
 
-// Ordered list of displayable pipeline stages. Each entry maps an artefact
-// key (as returned by /api/jobs/{id}/status) to a human-readable label.
+// States that have passed the human approval gate.
+const _PAST_APPROVAL_STATES = new Set([
+  "generating_documents",
+  "complete",
+]);
+
+// Ordered list of user-facing pipeline stages.
+//
+// Each stage has:
+//   label   — operator-facing label shown in the progress card
+//   key     — available_artefacts boolean key (null for virtual stages)
+//   virtual — special done-condition token:
+//               "submitted"  → always done once the job exists
+//               "approval"   → done once the job passes the approval gate
+//
+// Stages sharing the same artefact key (Exporting PDF / Exporting DOCX /
+// Delivery-ready all use document_manifest) will flip simultaneously — this
+// is the honest behaviour given the available backend data.
 const _TIMELINE_STAGES = [
-  { key: "research_dossier",  label: "Research dossier" },
-  { key: "contacts",          label: "Contacts" },
-  { key: "needs_assessment",  label: "Needs assessment" },
-  { key: "product_mapping",   label: "Product mapping" },
-  { key: "critic_report",     label: "Critic report" },
-  { key: "briefing",          label: "Briefing" },
-  { key: "prospect_brief",    label: "Prospect brief" },
-  { key: "document_manifest", label: "Documents" },
+  { label: "Submitted",            key: null,                virtual: "submitted" },
+  { label: "Researching company",  key: "research_dossier",  virtual: null       },
+  { label: "Finding contacts",     key: "contacts",          virtual: null       },
+  { label: "Assessing needs",      key: "needs_assessment",  virtual: null       },
+  { label: "Preparing briefing",   key: "briefing",          virtual: null       },
+  { label: "Awaiting approval",    key: null,                virtual: "approval"  },
+  { label: "Assembling brief",     key: "prospect_brief",    virtual: null       },
+  { label: "Exporting PDF",        key: "document_manifest", virtual: null       },
+  { label: "Exporting DOCX",       key: "document_manifest", virtual: null       },
+  { label: "Delivery-ready",       key: "document_manifest", virtual: null       },
 ];
 
 // Derive per-stage completion status from the snapshot's available_artefacts
-// map. Rules:
-//   active job  → first incomplete stage is _TS_ACTIVE, remainder _TS_PENDING
-//   failed      → incomplete stages are _TS_FAILED
-//   human-gated → incomplete stages are _TS_WAITING
-//   otherwise   → incomplete stages are _TS_PENDING
+// map and current_state.
+//
+// Rules:
+//   "submitted" virtual  → always _TS_DONE
+//   "approval" virtual   → _TS_DONE if past approval gate; _TS_WAITING if
+//                          currently at gate; _TS_PENDING otherwise
+//   artefact stage       → _TS_DONE if artefact exists; else the first
+//                          incomplete stage in an active job gets _TS_ACTIVE;
+//                          failed job gets _TS_FAILED; else _TS_PENDING
 function _computeStages(snapshot) {
   const artefacts = snapshot.available_artefacts || {};
   const state = snapshot.current_state;
   const isActive  = _ACTIVE_STATES.has(state);
   const isWaiting = _WAITING_STATES.has(state);
   const isFailed  = state === "failed";
-  let seenIncomplete = false;
+  let activeAssigned = false;
+
   return _TIMELINE_STAGES.map(stage => {
-    if (artefacts[stage.key]) {
-      return { ...stage, status: _TS_DONE };
+    // Determine whether this stage is complete.
+    let isDone;
+    if (stage.virtual === "submitted") {
+      isDone = true;
+    } else if (stage.virtual === "approval") {
+      isDone = _PAST_APPROVAL_STATES.has(state);
+    } else {
+      isDone = stage.key !== null && !!artefacts[stage.key];
     }
-    if (!seenIncomplete && isActive) {
-      seenIncomplete = true;
+
+    if (isDone) return { ...stage, status: _TS_DONE };
+
+    // Approval gate: operator action required — waiting when at gate.
+    if (stage.virtual === "approval") {
+      return { ...stage, status: isWaiting ? _TS_WAITING : _TS_PENDING };
+    }
+
+    // Active job: the first incomplete artefact stage gets the active indicator.
+    if (!activeAssigned && isActive) {
+      activeAssigned = true;
       return { ...stage, status: _TS_ACTIVE };
     }
-    seenIncomplete = true;
-    if (isFailed)  return { ...stage, status: _TS_FAILED };
-    if (isWaiting) return { ...stage, status: _TS_WAITING };
+
+    if (isFailed) return { ...stage, status: _TS_FAILED };
     return { ...stage, status: _TS_PENDING };
   });
 }
@@ -373,95 +409,119 @@ function _computeOverallProgress(stages) {
 }
 
 // Produce an approximate ETA string for active jobs by summing the
-// conservative duration ranges of all incomplete stages. Returns null for
-// terminal or human-gated states, and null if all stages are already done.
+// conservative duration ranges of all incomplete artefact stages.
+// Virtual stages and duplicate artefact keys are skipped so the total
+// is not inflated. Returns null for non-active states.
 function _computeEta(snapshot, stages) {
   if (!_ACTIVE_STATES.has(snapshot.current_state)) return null;
   let minTotal = 0;
   let maxTotal = 0;
+  const counted = new Set();
   for (const stage of stages) {
-    if (stage.status !== _TS_DONE) {
-      const [mn, mx] = _STAGE_DURATIONS[stage.key] || [1, 2];
-      minTotal += mn;
-      maxTotal += mx;
+    if (stage.status !== _TS_DONE && stage.key !== null && !stage.virtual) {
+      if (!counted.has(stage.key)) {
+        counted.add(stage.key);
+        const [mn, mx] = _STAGE_DURATIONS[stage.key] || [1, 2];
+        minTotal += mn;
+        maxTotal += mx;
+      }
     }
   }
   if (minTotal === 0 && maxTotal === 0) return null;
   return `about ${minTotal}–${maxTotal} min`;
 }
 
-// Render the progress timeline section. Returns a <section> element with
-// class "job-progress-timeline".
+// Badge text for each stage status token.
+const _BADGE_LABELS = {
+  done:    "Complete",
+  active:  "In progress",
+  pending: "Pending",
+  waiting: "Waiting",
+  failed:  "Failed",
+};
+
+// Render the progress dashboard section. Returns a <section> element with
+// class "job-progress-timeline" containing a "progress-card" div.
 //
-// Overall bar — determinate <progress> showing completed/total stages.
-// Per-stage bars — <div> elements with timeline-bar--{status} classes:
-//   done     → solid complete bar
-//   active   → animated indeterminate bar (CSS handles the animation)
-//   pending  → empty bar
-//   waiting  → paused/muted bar (operator action required)
-//   failed   → error-coloured bar
+// Layout:
+//   progress-card
+//     h3 "Progress"
+//     progress-overall
+//       overall label "Overall progress: N%"
+//       <progress class="progress-overall-bar"> (determinate, 0–100)
+//     <ul class="progress-timeline">
+//       <li class="progress-stage-row progress-stage-row--{status}">
+//         span.progress-stage-label   — stage name
+//         span.progress-stage-badge   — Complete / In progress / Pending / …
+//         div.progress-stage-bar      — visual bar (CSS handles colours/animation)
+//       </li> × N
+//     </ul>
+//     p.timeline-eta          (active jobs only)
+//     p.timeline-caveat
 //
-// No fake per-stage percentages are shown — only the overall figure and
-// the honest-approximation caveat are numeric.
+// Per-stage bar class: progress-stage-bar progress-stage-bar--{status}
+// Overall bar failure class: progress-overall-bar--failed
 function _renderProgressTimeline(snapshot) {
   const stages = _computeStages(snapshot);
   const isActive = _ACTIVE_STATES.has(snapshot.current_state);
   const isFailed = snapshot.current_state === "failed";
-  const eta = _computeEta(snapshot, stages);
-  const percent = _computeOverallProgress(stages);
+  const eta      = _computeEta(snapshot, stages);
+  const percent  = _computeOverallProgress(stages);
 
-  // Overall progress bar — <progress> is semantic and accessible.
+  // Overall progress bar — <progress> is semantic and screen-reader accessible.
   const overallBarClass = isFailed
-    ? "timeline-overall-bar timeline-overall-bar--failed"
-    : "timeline-overall-bar";
+    ? "progress-overall-bar progress-overall-bar--failed"
+    : "progress-overall-bar";
   const overallBar = el("progress", {
     class: overallBarClass,
     value: percent,
     max: 100,
   });
 
-  const items = stages.map(stage => {
-    const icon = stage.status === _TS_DONE    ? "✓"
-               : stage.status === _TS_ACTIVE  ? "…"
-               : stage.status === _TS_FAILED  ? "✗"
-               : stage.status === _TS_WAITING ? "⏸"
-               : "·";
-    const bar = el("div", {
-      class: `timeline-bar timeline-bar--${stage.status}`,
-    });
-    return el("li", { class: `timeline-item timeline-item--${stage.status}` }, [
-      el("span", { class: "timeline-icon", text: icon }),
-      el("span", { class: "timeline-label", text: stage.label }),
-      bar,
+  const stageRows = stages.map(stage => {
+    const badgeText = _BADGE_LABELS[stage.status] || stage.status;
+    return el("li", {
+      class: `progress-stage-row progress-stage-row--${stage.status}`,
+    }, [
+      el("span", { class: "progress-stage-label", text: stage.label }),
+      el("span", {
+        class: `progress-stage-badge progress-stage-badge--${stage.status}`,
+        text:  badgeText,
+      }),
+      el("div", {
+        class: `progress-stage-bar progress-stage-bar--${stage.status}`,
+      }),
     ]);
   });
 
-  const children = [
+  const cardChildren = [
     el("h3", { text: "Progress" }),
-    el("p", { class: "timeline-overall-label",
-              text: `Overall progress: ${percent}%` }),
-    overallBar,
-    el("ul", { class: "progress-timeline" }, items),
+    el("div", { class: "progress-overall" }, [
+      el("span", { class: "timeline-overall-label",
+                   text:  `Overall progress: ${percent}%` }),
+      overallBar,
+    ]),
+    el("ul", { class: "progress-timeline" }, stageRows),
   ];
 
   if (isActive) {
     const etaText = eta !== null ? eta : "calculating…";
-    children.push(el("p", {
+    cardChildren.push(el("p", {
       class: "timeline-eta",
-      text: `Estimated time remaining: ${etaText}`,
+      text:  `Estimated time remaining: ${etaText}`,
     }));
   }
 
   // Always shown — reminds operators not to treat the display as exact.
-  children.push(el("p", {
+  cardChildren.push(el("p", {
     class: "timeline-caveat muted",
-    text: "Progress is approximate — inferred from artefact availability, not live agent events.",
+    text:  "Progress is approximate — inferred from completed outputs, not live agent telemetry.",
   }));
 
   return el("section", {
     class: "job-progress-timeline",
     "aria-label": "Job progress",
-  }, children);
+  }, [el("div", { class: "progress-card" }, cardChildren)]);
 }
 
 

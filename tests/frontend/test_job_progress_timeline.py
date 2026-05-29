@@ -261,9 +261,9 @@ def test_honest_approximation_caveat_present(timeline_body: str) -> None:
     """An explicit caveat must state that progress is inferred from
     artefact availability, not live agent events, so operators are not
     misled about the precision of the display."""
-    assert "inferred from artefact availability" in timeline_body, (
+    assert "inferred from completed outputs" in timeline_body, (
         "_renderProgressTimeline must include the honest-approximation "
-        "caveat about progress being inferred from artefact availability"
+        "caveat about progress being inferred from completed outputs"
     )
 
 
