@@ -1,5 +1,10 @@
 /**
- * ANS Prospect Tool — SPA bootstrap and hash router (step 12).
+ * ANS Prospect Tool — SPA bootstrap and hash router.
+ *
+ * Step 12: initial scaffold.
+ * Step 46: replaced renderNav with renderShell(currentUser, route) which
+ *          renders the four-step workflow stepper, the Active Job chip, the
+ *          Operational Mode chip, and the operator identity panel.
  *
  * Routes:
  *   #/                      -> redirect to #/jobs/new (or #/setup/#/login)
@@ -33,25 +38,91 @@ import { render as renderManifestViewer } from "./screens/manifest_viewer.js";
 
 const PUBLIC_ROUTES = new Set(["setup", "login"]);
 
-function renderNav(currentUser) {
-  const nav = document.getElementById("app-nav");
-  if (!nav) return;
-  clear(nav);
-  if (!currentUser) return;
-  nav.appendChild(el("a", { href: "#/jobs/new", text: "New job" }));
-  nav.appendChild(el("span", { class: "nav-spacer", text: " · " }));
-  nav.appendChild(el("span", { class: "nav-user",
-                               text: `Signed in as ${currentUser}` }));
-  nav.appendChild(el("span", { class: "nav-spacer", text: " · " }));
-  nav.appendChild(el("a", {
-    href: "#",
-    text: "Sign out",
-    onclick: async (event) => {
-      event.preventDefault();
-      try { await api.logout(); } catch { /* idempotent */ }
-      navigate("#/login");
-    },
-  }));
+// ---------------------------------------------------------------------------
+// Workflow stepper — Step 46
+// ---------------------------------------------------------------------------
+
+// Ordered workflow steps shown in the header stepper. Each step lists the
+// route names that count as "this step is active". A step is "complete" when
+// a later step is active.
+const _STEPS = [
+  { n: 1, label: "New Job",         routes: new Set(["new_job"]) },
+  { n: 2, label: "Researching",     routes: new Set(["job_status"]) },
+  { n: 3, label: "Review Brief",    routes: new Set(["briefing", "brief_viewer"]) },
+  { n: 4, label: "Delivery Ready",  routes: new Set(["manifest_viewer"]) },
+];
+
+// Returns "active", "complete", or "" for a given step and current route.
+function _stepState(step, route) {
+  if (!route) return "";
+  if (step.routes.has(route.name)) return "active";
+  const activeIdx = _STEPS.findIndex(s => s.routes.has(route.name));
+  const stepIdx   = _STEPS.indexOf(step);
+  if (activeIdx > -1 && stepIdx < activeIdx) return "complete";
+  return "";
+}
+
+// Render the app shell: workflow stepper + operator identity panel.
+// Called on every dispatch so the header always reflects the current route.
+// Uses el() throughout — all DOM construction via the el() helper.
+function renderShell(currentUser, route) {
+  // --- Stepper ---
+  const stepper = document.getElementById("app-stepper");
+  if (stepper) {
+    clear(stepper);
+
+    // Active job chip: shown when the current route carries a job id.
+    const jobId = route && route.params && route.params.id;
+    if (currentUser && jobId) {
+      const shortId = jobId.length > 12
+        ? jobId.slice(0, 8) + "\u2026"
+        : jobId;
+      stepper.appendChild(el("span", { class: "app-active-job" }, [
+        el("span", { class: "app-active-job-label", text: "Active Job:" }),
+        el("span", { class: "app-active-job-name",  text: shortId }),
+      ]));
+      stepper.appendChild(
+        el("span", { class: "app-stepper-sep", text: " / " }),
+      );
+    }
+
+    _STEPS.forEach((step, idx) => {
+      if (idx > 0) {
+        stepper.appendChild(
+          el("span", { class: "app-stepper-sep", text: " / " }),
+        );
+      }
+      const state = _stepState(step, route);
+      const cls = state === "active"   ? "app-step app-step--active"
+                : state === "complete" ? "app-step app-step--complete"
+                : "app-step";
+      stepper.appendChild(el("span", { class: cls }, [
+        el("span", { class: "app-step-num",   text: String(step.n) }),
+        el("span", { class: "app-step-label", text: step.label }),
+      ]));
+    });
+  }
+
+  // --- Operator panel ---
+  const operatorDiv = document.getElementById("app-operator");
+  if (operatorDiv) {
+    clear(operatorDiv);
+    if (!currentUser) return;
+    operatorDiv.appendChild(el("div", { class: "app-operator-info" }, [
+      el("span", { class: "app-operator-name",  text: "Internal Operator" }),
+      el("span", { class: "app-operator-email", text: currentUser }),
+    ]));
+    operatorDiv.appendChild(el("a", {
+      href: "#",
+      class: "app-operator-signout btn btn-ghost",
+      text: "Sign out",
+      onclick: async (event) => {
+        event.preventDefault();
+        try { await api.logout(); } catch { /* idempotent */ }
+        navigate("#/login");
+      },
+    }));
+  }
 }
 
 async function checkSetup() {
@@ -84,7 +155,7 @@ async function dispatch() {
 
   // Public routes render immediately — no auth check.
   if (PUBLIC_ROUTES.has(route.name)) {
-    renderNav(null);
+    renderShell(null, route);
     if (route.name === "setup") {
       const isSetUp = await checkSetup();
       if (isSetUp) { navigate("#/login"); return; }
@@ -101,7 +172,7 @@ async function dispatch() {
   const username = await whoAmI();
   if (!username) { navigate("#/login"); return; }
 
-  renderNav(username);
+  renderShell(username, route);
 
   switch (route.name) {
     case "home":

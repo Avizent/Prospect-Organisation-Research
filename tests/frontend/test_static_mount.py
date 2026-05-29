@@ -47,6 +47,15 @@ def test_serves_inspector_css(client: TestClient) -> None:
     assert ".app-main" in r.text
 
 
+def test_serves_design_css(client: TestClient) -> None:
+    """Step 46 design-system stylesheet must be served as CSS."""
+    r = client.get("/styles/design.css")
+    assert r.status_code == 200, r.text
+    ctype = r.headers.get("content-type", "")
+    assert "css" in ctype, ctype
+    assert "--primary" in r.text
+
+
 def test_serves_screen_modules(client: TestClient) -> None:
     """All screens must be reachable as static modules."""
     for name in (

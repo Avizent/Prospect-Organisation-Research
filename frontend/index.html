@@ -1,12 +1,11 @@
 <!DOCTYPE html>
 <!--
-  ANS Prospect Tool — minimal inspector SPA shell (step 12).
+  ANS Prospect Tool — SPA shell.
 
-  This shell is deliberately functional, not polished — HIG-quality
-  presentation lands in step 15-17. The goal here is to expose the
-  Step 11 backend (job intake, artefact reads, approval gate) over
-  HTML so the operator can walk a job through the fake-safe workflow
-  end-to-end.
+  Step 12: initial scaffold.
+  Step 46: redesigned header — app logo, workflow stepper,
+           Operational Mode chip, and operator identity zone.
+           See frontend/styles/design.css for visual tokens.
 
   No production credentials, no model-vendor SDK, no mail delivery,
   no document generation. The static fence in
@@ -19,11 +18,22 @@
   <meta name="referrer" content="same-origin">
   <title>ANS Prospect Tool</title>
   <link rel="stylesheet" href="/styles/inspector.css">
+  <link rel="stylesheet" href="/styles/design.css">
 </head>
 <body>
-  <header class="app-header">
-    <h1 class="app-title">ANS Prospect Tool</h1>
-    <nav class="app-nav" id="app-nav" aria-label="Primary"></nav>
+  <header class="app-header" id="app-header">
+    <div class="app-logo">
+      <span class="app-logo-icon" aria-hidden="true">A</span>
+      <div class="app-logo-text">
+        <span class="app-logo-name">ANS Prospect Tool</span>
+        <span class="app-logo-sub">B2B Intelligence</span>
+      </div>
+    </div>
+    <nav class="app-stepper" id="app-stepper" aria-label="Workflow steps"></nav>
+    <div class="app-shell-right" id="app-shell-right">
+      <span class="app-mode-chip">Operational Mode</span>
+      <div class="app-operator" id="app-operator"></div>
+    </div>
   </header>
   <main class="app-main" id="app-main" aria-live="polite">Loading…</main>
   <div class="app-toast" id="app-toast" role="status" aria-live="polite"></div>

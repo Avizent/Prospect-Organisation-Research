@@ -54,10 +54,30 @@ def test_loads_app_js_as_module(html: str) -> None:
 
 
 def test_has_main_and_nav_landmarks(html: str) -> None:
-    """The router writes into #app-main; the nav writes into #app-nav."""
+    """The router writes into #app-main; the shell into #app-stepper and
+    #app-operator; the toast into #app-toast."""
     assert 'id="app-main"' in html
-    assert 'id="app-nav"' in html
+    assert 'id="app-stepper"' in html
+    assert 'id="app-operator"' in html
     assert 'id="app-toast"' in html
+
+
+def test_loads_design_css(html: str) -> None:
+    """Step 46 design-system stylesheet must be linked."""
+    assert 'href="/styles/design.css"' in html
+
+
+def test_has_app_logo(html: str) -> None:
+    """The new header must include the app-logo zone."""
+    assert 'class="app-logo"' in html
+    assert 'class="app-logo-name"' in html
+    assert 'class="app-logo-sub"' in html
+
+
+def test_has_app_shell_right(html: str) -> None:
+    """The new header must include the right-zone shell divs."""
+    assert 'id="app-shell-right"' in html
+    assert 'class="app-mode-chip"' in html
 
 
 def test_html_parses_as_xml_after_doctype_strip(html: str) -> None:

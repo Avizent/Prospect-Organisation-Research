@@ -1,0 +1,490 @@
+/*
+ * ANS Prospect Tool — design system CSS (step 46).
+ *
+ * Loaded after inspector.css. Provides:
+ *   - CSS custom properties (design tokens)
+ *   - App shell / stepper overrides
+ *   - Reusable card, button, badge, and alert primitives
+ *
+ * No external fonts, no CDN, no external imports, no build step.
+ * All DOM construction that uses these classes goes through the el() helper —
+ * direct DOM property assignment is not permitted.
+ *
+ * Colour reference: Google AI Studio UI screenshots
+ *   design-reference/google-ai-studio-ui/
+ */
+
+/* ---------------------------------------------------------------------------
+ * 1. Design tokens
+ * --------------------------------------------------------------------------- */
+
+:root {
+  /* Backgrounds */
+  --bg:             #f3f4f6;
+  --surface:        #ffffff;
+  --surface-muted:  #f8f9fb;
+
+  /* Text */
+  --text:           #111827;
+  --text-muted:     #6b7280;
+  --text-faint:     #9ca3af;
+
+  /* Borders */
+  --border:         #e5e7eb;
+
+  /* Primary CTA — dark navy (Generate Documents, Approve & Export, etc.) */
+  --primary:        #0f1c2e;
+  --primary-dark:   #060e1a;
+
+  /* Semantic colours */
+  --success:        #10b981;
+  --success-bg:     #d1fae5;
+  --success-text:   #065f46;
+  --warning:        #f59e0b;
+  --warning-bg:     #fef3c7;
+  --warning-text:   #92400e;
+  --danger:         #ef4444;
+  --danger-bg:      #fee2e2;
+  --danger-text:    #991b1b;
+  --accent:         #4f46e5;
+  --accent-bg:      #ede9fe;
+  --accent-text:    #3730a3;
+  --teal:           #10b981;
+  --teal-bg:        #d1fae5;
+  --teal-text:      #065f46;
+
+  /* Shape & elevation */
+  --radius:         10px;
+  --radius-sm:      6px;
+  --shadow:         0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:      0 4px 6px rgba(0,0,0,.07),0 2px 4px rgba(0,0,0,.05);
+}
+
+/* ---------------------------------------------------------------------------
+ * 2. Base overrides
+ * --------------------------------------------------------------------------- */
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app-main {
+  max-width: 1140px;
+  padding: 32px 24px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 3. App shell
+ * --------------------------------------------------------------------------- */
+
+/* Header bar — overrides inspector.css .app-header */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 52px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  gap: 16px;
+}
+
+/* --- Logo zone ----------------------------------------------------------- */
+
+.app-logo {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+  text-decoration: none;
+  color: inherit;
+}
+
+.app-logo-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: #2563eb;
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.app-logo-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.app-logo-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.app-logo-sub {
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* --- Stepper ------------------------------------------------------------ */
+
+.app-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.app-stepper-sep {
+  color: var(--text-faint);
+  margin: 0 6px;
+  font-size: 12px;
+  font-weight: 300;
+}
+
+.app-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.app-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.app-step-label {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* Active step */
+.app-step--active {
+  color: var(--teal);
+}
+
+.app-step--active .app-step-label {
+  font-weight: 600;
+}
+
+.app-step--active .app-step-num {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #ffffff;
+}
+
+/* Complete step */
+.app-step--complete {
+  color: var(--teal);
+}
+
+.app-step--complete .app-step-num {
+  background: var(--teal-bg);
+  border-color: var(--teal);
+  color: var(--teal-text);
+}
+
+/* --- Active job chip ---------------------------------------------------- */
+
+.app-active-job {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #1f2937;
+  border-radius: 5px;
+  padding: 3px 9px;
+  font-size: 11px;
+  color: #ffffff;
+  white-space: nowrap;
+  margin-right: 2px;
+}
+
+.app-active-job-label {
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+.app-active-job-name {
+  font-weight: 600;
+  color: #ffffff;
+}
+
+/* --- Right shell zone --------------------------------------------------- */
+
+.app-shell-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+/* Operational Mode chip */
+.app-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.app-mode-chip::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+}
+
+/* Operator identity */
+.app-operator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.app-operator-info {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+  text-align: right;
+}
+
+.app-operator-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.app-operator-email {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.app-operator-signout {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.app-operator-signout:hover { text-decoration: underline; }
+
+/* ---------------------------------------------------------------------------
+ * 4. Page layout primitives
+ * --------------------------------------------------------------------------- */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+
+.page-title {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 4px 0;
+  line-height: 1.2;
+}
+
+.page-subtitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * 5. Cards
+ * --------------------------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.card-body {
+  padding: 20px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 6. Buttons — override inspector.css .btn-* variants
+ * --------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 80ms ease, opacity 80ms ease;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+}
+.btn-primary:hover         { background: var(--primary-dark); border-color: var(--primary-dark); }
+.btn-primary[disabled]     { opacity: .45; cursor: not-allowed; }
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+.btn-secondary:hover       { background: var(--surface-muted); }
+.btn-secondary[disabled]   { color: var(--text-muted); cursor: not-allowed; }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: transparent;
+}
+.btn-ghost:hover           { background: var(--surface-muted); color: var(--text); }
+
+/* ---------------------------------------------------------------------------
+ * 7. Badges / chips
+ * --------------------------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.badge-success {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-color: transparent;
+}
+
+.badge-warning {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  border-color: transparent;
+}
+
+.badge-muted {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.badge-info {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  border-color: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+ * 8. Alerts
+ * --------------------------------------------------------------------------- */
+
+.alert {
+  display: flex;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  border: 1px solid transparent;
+}
+
+.alert-info {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  border-color: #c4b5fd;
+}
+
+.alert-warning {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  border-color: #fcd34d;
+}
+
+.alert-error {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border-color: #fca5a5;
+}
+
+/* ---------------------------------------------------------------------------
+ * 9. Print isolation — A4/export output must not inherit shell styles
+ * --------------------------------------------------------------------------- */
+
+@media print {
+  :root {
+    --bg:       #ffffff;
+    --surface:  #ffffff;
+    --shadow:   none;
+    --shadow-md:none;
+  }
+  .app-header,
+  .app-stepper,
+  .app-shell-right,
+  .app-toast {
+    display: none !important;
+  }
+}
