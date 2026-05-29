@@ -749,6 +749,94 @@ function _renderWarnings(manifest) {
 }
 
 
+// ---------------------------------------------------------------------------
+// Step 43: delivery-ready files panel
+// ---------------------------------------------------------------------------
+//
+// A read-only panel placed near the top of the manifest viewer so the
+// operator can immediately download the latest PDF and DOCX outputs
+// after a one-click Generate Documents run.
+//
+// Design rules:
+//   - Download links only (anchor elements, never POST calls).
+//   - Missing-file notices with a "go generate" hint when exports absent.
+//   - Plain-language instruction for manual attachment to email or CRM.
+//   - No external integrations of any kind — delivery is the
+//     operator's own action, not the application's.
+
+function _renderDeliveryReadyPanel(jobId, manifest) {
+  const pdfEntry = _findPdfExportEntry(manifest);
+  const docxEntry = _findDocxExportEntry(manifest);
+
+  const children = [
+    el("h3", { text: "Delivery-ready files" }),
+    el("p", {
+      class: "delivery-instruction",
+      text: (
+        "Download these files and attach them manually "
+        + "to your email or CRM."
+      ),
+    }),
+  ];
+
+  const fileList = el("ul", { class: "delivery-file-list" });
+
+  // PDF row — download link when available; missing notice otherwise.
+  if (pdfEntry) {
+    const pdfLink = el("a", {
+      class: "btn-download-pdf-delivery",
+      href: `/api/jobs/${encodeURIComponent(jobId)}/exports/pdf`,
+      text: "Download latest PDF",
+    });
+    fileList.appendChild(el("li", { class: "delivery-file-item" }, [pdfLink]));
+  } else {
+    fileList.appendChild(el("li", {
+      class: "delivery-file-item delivery-file-missing",
+      text: "Missing PDF",
+    }));
+  }
+
+  // DOCX row — download link when available; missing notice otherwise.
+  if (docxEntry) {
+    const docxLink = el("a", {
+      class: "btn-download-docx-delivery",
+      href: `/api/jobs/${encodeURIComponent(jobId)}/exports/docx`,
+      text: "Download latest DOCX",
+    });
+    fileList.appendChild(el("li", { class: "delivery-file-item" }, [docxLink]));
+  } else {
+    fileList.appendChild(el("li", {
+      class: "delivery-file-item delivery-file-missing",
+      text: "Missing DOCX",
+    }));
+  }
+
+  children.push(fileList);
+
+  // When either file is missing, direct the operator back to generate them.
+  if (!pdfEntry || !docxEntry) {
+    children.push(el("p", {
+      class: "delivery-missing-hint",
+      text: (
+        "One or more files are missing. Return to Job Status "
+        + "and click Generate Documents to produce them."
+      ),
+    }));
+    children.push(el("p", {}, [
+      el("a", {
+        href: `#/jobs/${encodeURIComponent(jobId)}`,
+        text: "Go to Job Status",
+      }),
+    ]));
+  }
+
+  return el("section", {
+    class: "delivery-ready-panel",
+    "aria-label": "Delivery-ready files",
+  }, children);
+}
+
+
 export async function render(container, params) {
   const id = params.id;
   clear(container);
@@ -821,6 +909,10 @@ export async function render(container, params) {
   // ``source_markdown_drift`` is present.
   const driftBanner = _renderSourceDriftBanner(lifecycle);
   if (driftBanner) container.appendChild(driftBanner);
+
+  // Step 43: delivery-ready panel — placed near the top so the operator
+  // sees the download links immediately after a Generate Documents run.
+  container.appendChild(_renderDeliveryReadyPanel(id, manifest));
 
   container.appendChild(_renderSummary(manifest, lifecycle));
   container.appendChild(_renderOutputs(manifest));
