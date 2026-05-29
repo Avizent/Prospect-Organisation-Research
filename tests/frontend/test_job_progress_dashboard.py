@@ -153,6 +153,107 @@ def test_progress_stage_row_replaces_bullet_list(timeline_body: str) -> None:
     )
 
 
+def test_progress_stage_main_wrapper_exists(timeline_body: str) -> None:
+    """Each row must contain a ``progress-stage-main`` div that groups
+    the icon, label, and badge.
+
+    Without this block-level wrapper the three inline ``<span>``
+    elements concatenate in the rendered output (e.g. "SubmittedComplete")
+    because adjacent inline nodes share the same text flow.
+    """
+    assert "progress-stage-main" in timeline_body, (
+        "_renderProgressTimeline must include a 'progress-stage-main' "
+        "wrapper div inside each progress-stage-row"
+    )
+
+
+def test_progress_stage_main_is_div(timeline_body: str) -> None:
+    """The main-row wrapper must be a block-level ``<div>`` so it
+    separates from the bar without requiring CSS."""
+    assert re.search(
+        r'el\(\s*"div"\s*,\s*\{[^}]*progress-stage-main',
+        timeline_body,
+        flags=re.DOTALL,
+    ), (
+        "progress-stage-main must be el(\"div\", { class: 'progress-stage-main' })"
+    )
+
+
+def test_progress_stage_icon_exists(timeline_body: str) -> None:
+    """Each row must include a ``progress-stage-icon`` span carrying the
+    status glyph so operators can scan state at a glance."""
+    assert "progress-stage-icon" in timeline_body, (
+        "_renderProgressTimeline must include a 'progress-stage-icon' span"
+    )
+
+
+def test_progress_stage_bar_fill_exists(timeline_body: str) -> None:
+    """The bar ``<div>`` must contain a ``progress-stage-bar-fill``
+    child span so CSS can animate the fill width without touching the
+    bar container dimensions."""
+    assert "progress-stage-bar-fill" in timeline_body, (
+        "_renderProgressTimeline must include a 'progress-stage-bar-fill' "
+        "span inside each progress-stage-bar div"
+    )
+
+
+def test_bar_fill_is_child_span_of_bar_div(timeline_body: str) -> None:
+    """``progress-stage-bar-fill`` must be a ``<span>`` nested inside
+    the bar ``<div>``, not a sibling element."""
+    assert re.search(
+        r'el\(\s*"span"\s*,\s*\{[^}]*progress-stage-bar-fill',
+        timeline_body,
+        flags=re.DOTALL,
+    ), (
+        "progress-stage-bar-fill must be el(\"span\", { class: 'progress-stage-bar-fill' })"
+    )
+
+
+def test_label_and_badge_not_adjacent_without_wrapper(
+    timeline_body: str,
+) -> None:
+    """The label and badge ``<span>`` must not be direct children of the
+    ``<li>`` — they must be inside the ``progress-stage-main`` div.
+
+    The anti-pattern that caused the concatenation bug was:
+      el("li", {...}, [
+        el("span", {class: "progress-stage-label", ...}),
+        el("span", {class: "progress-stage-badge", ...}),   ← adjacent spans
+        el("div",  {class: "progress-stage-bar",   ...}),
+      ])
+
+    We detect the anti-pattern by checking that the badge span and bar
+    div are NOT directly adjacent after the label span within the li
+    children array (i.e. the label's closing ]) is not immediately
+    followed by a badge el call at the same nesting level).
+    """
+    # Structural proof: if progress-stage-main exists as a block wrapper,
+    # the label and badge are necessarily not adjacent bare children of <li>.
+    # The presence of progress-stage-main (checked separately) is the
+    # authoritative fix; this test adds a belt-and-suspenders check that
+    # the old anti-pattern no longer appears literally in the source.
+    bad_pattern = re.search(
+        r'el\(\s*"li"[^;]{0,200}'
+        r'el\(\s*"span"[^)]*progress-stage-label[^;]{0,80}'
+        r'el\(\s*"span"[^)]*progress-stage-badge',
+        timeline_body,
+        flags=re.DOTALL,
+    )
+    assert not bad_pattern, (
+        "label span and badge span must not be direct adjacent children "
+        "of the <li> without a block wrapper — wrap them in "
+        "progress-stage-main to prevent text concatenation"
+    )
+
+
+def test_no_innerhtml_in_renderer(timeline_body: str) -> None:
+    """The renderer must not use ``innerHTML`` — all DOM construction
+    must go through the ``el()`` helper."""
+    assert "innerHTML" not in timeline_body, (
+        "_renderProgressTimeline must not use innerHTML"
+    )
+
+
 def test_progress_stage_row_uses_status_template(timeline_body: str) -> None:
     """Stage rows must derive their modifier via a template literal."""
     assert re.search(

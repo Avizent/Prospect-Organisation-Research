@@ -334,3 +334,15 @@ def test_render_progress_timeline_called(inspector_src: str) -> None:
     assert "_renderProgressTimeline(" in inspector_src, (
         "_renderProgressTimeline must be called from render()"
     )
+
+
+# ---------------------------------------------------------------------------
+# 9. No innerHTML
+# ---------------------------------------------------------------------------
+
+def test_no_innerhtml_in_file(inspector_src: str) -> None:
+    """``innerHTML`` must never appear in ``job_status.js`` — all DOM
+    construction must use the ``el()`` helper to prevent XSS."""
+    assert "innerHTML" not in inspector_src, (
+        "job_status.js must not use innerHTML — use el() for all DOM construction"
+    )

@@ -160,4 +160,90 @@ h3 { font-size: 16px; margin-top: 24px; }
 .regen-details summary { cursor: pointer; color: #555555; font-size: 13px; }
 .last-error { margin-top: 24px; }
 
+/* ------------------------------------
+ * Step 45 — job progress dashboard
+ * ------------------------------------ */
+.job-progress-timeline { margin: 16px 0; }
+
+.progress-card {
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  padding: 16px 20px;
+  background: #ffffff;
+}
+
+.progress-overall { margin-bottom: 12px; }
+.timeline-overall-label { display: block; font-size: 13px; margin-bottom: 4px; }
+.progress-overall-bar { display: block; width: 100%; height: 8px; border-radius: 4px; }
+
+.progress-timeline { list-style: none; padding: 0; margin: 12px 0; }
+
+.progress-stage-row { margin-bottom: 8px; }
+
+.progress-stage-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.progress-stage-icon {
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.progress-stage-label { flex: 1; font-size: 13px; }
+
+.progress-stage-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  background: #eeeeee;
+  color: #444444;
+}
+.progress-stage-badge--done    { background: #d1fae5; color: #065f46; }
+.progress-stage-badge--active  { background: #dbeafe; color: #1e40af; }
+.progress-stage-badge--pending { background: #f1f5f9; color: #64748b; }
+.progress-stage-badge--waiting { background: #fef9c3; color: #78350f; }
+.progress-stage-badge--failed  { background: #fee2e2; color: #991b1b; }
+
+.progress-stage-bar {
+  height: 4px;
+  background: #e5e5e5;
+  border-radius: 2px;
+  margin-left: 24px;
+  overflow: hidden;
+}
+.progress-stage-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+}
+.progress-stage-bar--done .progress-stage-bar-fill {
+  width: 100%;
+  background: #22c55e;
+}
+.progress-stage-bar--active .progress-stage-bar-fill {
+  width: 55%;
+  background: #3b82f6;
+  animation: progress-pulse 1.4s ease-in-out infinite;
+}
+@keyframes progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.progress-stage-bar--waiting .progress-stage-bar-fill { background: #94a3b8; }
+.progress-stage-bar--failed .progress-stage-bar-fill {
+  width: 100%;
+  background: #ef4444;
+}
+.progress-overall-bar--failed { accent-color: #ef4444; }
+
+.timeline-eta { margin: 8px 0 4px; font-size: 13px; }
+.timeline-caveat { margin: 4px 0 0; }
+
 .hidden { display: none !important; }

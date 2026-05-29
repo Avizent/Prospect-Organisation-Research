@@ -479,19 +479,32 @@ function _renderProgressTimeline(snapshot) {
   });
 
   const stageRows = stages.map(stage => {
+    const icon = stage.status === _TS_DONE    ? "✓"
+               : stage.status === _TS_ACTIVE  ? "…"
+               : stage.status === _TS_FAILED  ? "✗"
+               : stage.status === _TS_WAITING ? "⏸"
+               : "·";
     const badgeText = _BADGE_LABELS[stage.status] || stage.status;
-    return el("li", {
-      class: `progress-stage-row progress-stage-row--${stage.status}`,
-    }, [
+    // progress-stage-main is a block wrapper so icon/label/badge render
+    // on one line and are clearly separated from the bar below them.
+    const mainRow = el("div", { class: "progress-stage-main" }, [
+      el("span", { class: "progress-stage-icon", text: icon }),
       el("span", { class: "progress-stage-label", text: stage.label }),
       el("span", {
         class: `progress-stage-badge progress-stage-badge--${stage.status}`,
         text:  badgeText,
       }),
-      el("div", {
-        class: `progress-stage-bar progress-stage-bar--${stage.status}`,
-      }),
     ]);
+    // progress-stage-bar-fill is a child span so CSS can animate width
+    // without setting it on the bar container directly.
+    const barDiv = el("div", {
+      class: `progress-stage-bar progress-stage-bar--${stage.status}`,
+    }, [
+      el("span", { class: "progress-stage-bar-fill" }),
+    ]);
+    return el("li", {
+      class: `progress-stage-row progress-stage-row--${stage.status}`,
+    }, [mainRow, barDiv]);
   });
 
   const cardChildren = [
