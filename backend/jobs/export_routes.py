@@ -120,7 +120,9 @@ from backend.jobs.state import JobState
 from backend.jobs.storage import (
     JobNotFound,
     export_path_for,
+    find_export_entry,
     read_document_manifest,
+    read_export_archive_bytes,
     read_export_bytes,
     read_prospect_brief_markdown,
     read_state,
@@ -755,6 +757,315 @@ def get_export_docx(
 ) -> Response:
     """Stream the rendered DOCX bytes back to the caller."""
     return _retrieve_export(fmt="docx", job_id=job_id, request=request)
+
+
+# ---------------------------------------------------------------------------
+# Route — GET /exports/{format}/{export_id}  (Step 41 historical retrieval)
+# ---------------------------------------------------------------------------
+#
+# Strict read path: resolves the archive copy for a specific (format,
+# export_id) pair. No file is written. No manifest is mutated. No state
+# is mutated. No lifecycle is changed.
+#
+# Response headers beyond the normal GET route:
+#
+#   ``ETag``                  — ``"{export_id}"`` (quoted per RFC 7232;
+#                               content-addressed, so immutable forever)
+#   ``X-Export-Version``      — the entry's monotonic ``version`` int
+#   ``X-Export-Id``           — the full 64-char ``export_id``
+#   ``X-Export-Latest``       — "true" iff this == ``latest_export_id[fmt]``
+#   ``X-Export-Superseded``   — "true" iff a later version for this fmt
+#                               exists in ``exports[]``
+#   ``Cache-Control``         — ``private, max-age=31536000, immutable``
+#                               (Step 40 guarantees identity is content-
+#                               addressed; the bytes never change for a
+#                               given export_id)
+#
+# ``X-Export-Stale*`` headers are also emitted, computed against the
+# *historical* entry, not the current latest — see
+# :func:`_compute_stale_headers_for_entry`.
+
+
+def _is_valid_export_id(s: Any) -> bool:
+    """Return ``True`` iff ``s`` is a 64-char lowercase-hex SHA-256 string.
+
+    Inline copy of the same guard in :mod:`backend.jobs.storage` so the
+    route can reject malformed ids before touching disk, without
+    importing the private storage symbol.
+    """
+    return (
+        isinstance(s, str)
+        and len(s) == 64
+        and all(c in "0123456789abcdef" for c in s)
+    )
+
+
+def _is_superseded(manifest: dict[str, Any], fmt: str, version: int) -> bool:
+    """Return ``True`` iff a later ``exports[]`` entry for ``fmt`` exists.
+
+    "Later" means any entry for the same format whose ``version > version``.
+    An entry is superseded as soon as a re-render lands; this is the
+    O(n) scan over ``exports[]``.
+    """
+    exports = manifest.get("exports")
+    if not isinstance(exports, list):
+        return False
+    for entry in exports:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("format") != fmt:
+            continue
+        v_raw = entry.get("version")
+        if isinstance(v_raw, int) and v_raw > version:
+            return True
+    return False
+
+
+def _compute_stale_headers_for_entry(
+    manifest: dict[str, Any],
+    entry: dict[str, Any],
+    fmt: str,
+    on_disk_md_sha: str | None,
+) -> dict[str, str]:
+    """Project per-entry staleness onto the three documented headers for a
+    *specific historical* entry.
+
+    Differences from :func:`_compute_stale_headers` (which targets the
+    *latest* entry):
+
+    * The ``"superseded"`` reason is added when
+      ``latest_export_id[fmt] != entry["export_id"]`` — an older entry is
+      always stale by virtue of having been superseded.
+    * ``X-Export-Source-Markdown-SHA256`` reflects the *entry's own*
+      ``source_markdown_sha256`` (the markdown the historical render saw),
+      not the current manifest's ``markdown_sha256``. This is explicitly
+      documented so callers understand the difference.
+    * The underlying :func:`compute_export_lifecycle` call still fires for
+      source-markdown drift; both "superseded" and drift can be true
+      simultaneously.
+    """
+    from backend.exporters.lifecycle import compute_export_lifecycle
+
+    reasons: list[str] = []
+
+    # Manifest's current markdown sha (for drift detection inside
+    # compute_export_lifecycle).
+    manifest_md_sha_raw = manifest.get("markdown_sha256")
+    manifest_md_sha = (
+        manifest_md_sha_raw if isinstance(manifest_md_sha_raw, str) else None
+    )
+
+    # Source sha advertised in this historical entry (reflects what the
+    # renderer operated on, not the current manifest markdown).
+    entry_source_sha_raw = entry.get("source_markdown_sha256")
+    entry_source_sha = (
+        entry_source_sha_raw if isinstance(entry_source_sha_raw, str) else ""
+    )
+
+    # Run the shared lifecycle algebra over the historical entry.
+    # ``compute_export_lifecycle`` is imported at module level from
+    # :mod:`backend.exporters.lifecycle`.
+    entry_lifecycle = compute_export_lifecycle(
+        entry,
+        manifest_markdown_sha256=manifest_md_sha,
+        on_disk_markdown_sha256=on_disk_md_sha,
+    )
+    if entry_lifecycle.get("stale"):
+        reasons.extend(entry_lifecycle.get("reasons") or [])
+
+    # Step 41 — "superseded" reason: a newer entry exists for this format.
+    latest_map = manifest.get("latest_export_id")
+    if isinstance(latest_map, dict):
+        if latest_map.get(fmt) != entry.get("export_id"):
+            reasons.append("superseded")
+    else:
+        # Manifest has no latest_export_id (pre-v3). A positional check:
+        # if there is more than one entry for this format the historical
+        # one is superseded.
+        exports = manifest.get("exports")
+        if isinstance(exports, list):
+            count = sum(
+                1 for e in exports
+                if isinstance(e, dict) and e.get("format") == fmt
+            )
+            if count > 1:
+                reasons.append("superseded")
+
+    stale = "true" if reasons else "false"
+    return {
+        "X-Export-Stale": stale,
+        "X-Export-Stale-Reasons": ",".join(reasons),
+        "X-Export-Source-Markdown-SHA256": entry_source_sha,
+    }
+
+
+@router.get(
+    "/{job_id}/exports/{format}/{export_id}",
+)
+def get_export_historical(
+    job_id: str,
+    format: str,
+    export_id: str,
+    request: Request,
+    _username: str = Depends(current_username),
+) -> Response:
+    """Return the immutable archive bytes for ``(job_id, format, export_id)``.
+
+    Step 41 — historical retrieval. This route is strictly read-only:
+
+    * no manifest mutation,
+    * no state mutation,
+    * no archive write,
+    * no regeneration.
+
+    The ``export_id`` is the content-addressed SHA-256 of the rendered
+    bytes. The ``(job_id, format, export_id)`` triple is immutable by
+    Step 40 design — the response carries ``Cache-Control: private,
+    max-age=31536000, immutable`` to signal this to the client.
+
+    Preconditions (in order):
+
+    1. ``format`` must be in :data:`ROUTE_FORMATS`.
+    2. ``export_id`` must be a 64-char lowercase-hex string.
+    3. Job must exist (state.json readable).
+    4. A matching ``exports[]`` entry must exist in the manifest.
+    5. The archive bytes file must exist on disk.
+
+    Any missing pre-condition returns 404 (not 422) to avoid information
+    leakage through differentiated error shapes.
+    """
+    # 1. Validate format.
+    if format not in ROUTE_FORMATS:
+        raise _http_404(
+            "unknown_format",
+            message=f"format {format!r} is not supported",
+        )
+
+    # 2. Validate export_id shape before touching disk.
+    if not _is_valid_export_id(export_id):
+        raise _http_404(
+            "invalid_export_id",
+            message=(
+                "export_id must be a 64-char lowercase-hex SHA-256 string"
+            ),
+        )
+
+    # 3. Validate job exists.
+    try:
+        read_state(job_id)
+    except JobNotFound as exc:
+        raise _http_404("job_not_found", message=str(exc)) from exc
+    except ValueError as exc:
+        raise _http_404(
+            "job_not_found", message=f"invalid job id: {exc}",
+        ) from exc
+
+    # 4. Look up the manifest entry (JSON parse errors propagate as 500).
+    try:
+        entry = find_export_entry(job_id, format, export_id)
+    except (json.JSONDecodeError, ValueError) as exc:
+        log.exception(
+            "manifest corrupt or invalid for job %s (historical lookup)",
+            job_id,
+        )
+        raise _http_500("manifest_corrupt", message=str(exc)) from exc
+
+    if entry is None:
+        raise _http_404(
+            "export_not_found",
+            message=(
+                f"no export with id {export_id[:12]}… found for "
+                f"format {format!r}"
+            ),
+        )
+
+    # 5. Read the archive bytes.
+    version = entry.get("version")
+    if not isinstance(version, int) or version < 1:
+        log.error(
+            "manifest entry for job %s export_id %s has invalid version %r",
+            job_id, export_id, version,
+        )
+        raise _http_500(
+            "manifest_corrupt",
+            message="export entry has invalid version field",
+        )
+    try:
+        payload = read_export_archive_bytes(job_id, format, version)
+    except JobNotFound as exc:
+        # Archive bytes gone — deployment-integrity failure, not a user 404.
+        log.error(
+            "archive missing for job %s format %s version %s: %s",
+            job_id, format, version, exc,
+        )
+        raise _http_500(
+            "export_archive_missing",
+            message=(
+                f"archive bytes for v{version} of {format!r} are missing"
+            ),
+        ) from exc
+    except OSError as exc:
+        raise _http_500(
+            "export_archive_read_failed",
+            message=f"could not read archive bytes: {exc}",
+        ) from exc
+
+    # 6. Compute derived boolean headers.
+    spec: RendererSpec = EXPORT_RENDERERS[format]
+    etag = f'"{export_id}"'
+
+    try:
+        manifest = read_document_manifest(job_id)
+    except JobNotFound:
+        manifest = {}
+    if not isinstance(manifest, dict):
+        manifest = {}
+
+    latest_map = manifest.get("latest_export_id")
+    is_latest = (
+        isinstance(latest_map, dict)
+        and latest_map.get(format) == export_id
+    )
+    superseded = _is_superseded(manifest, format, version)
+
+    # 7. Compute staleness against the historical entry.
+    try:
+        md_text = read_prospect_brief_markdown(job_id)
+        on_disk_md_sha: str | None = sha256_hex(md_text.encode("utf-8"))
+    except JobNotFound:
+        on_disk_md_sha = None
+
+    stale_headers = _compute_stale_headers_for_entry(
+        manifest, entry, format, on_disk_md_sha,
+    )
+
+    # 8. Conditional GET.
+    common_headers = {
+        "ETag": etag,
+        "X-Export-Version": str(version),
+        "X-Export-Id": export_id,
+        "X-Export-Latest": "true" if is_latest else "false",
+        "X-Export-Superseded": "true" if superseded else "false",
+        "Cache-Control": "private, max-age=31536000, immutable",
+        **stale_headers,
+    }
+
+    if request.headers.get("if-none-match") == etag:
+        return Response(
+            status_code=status.HTTP_304_NOT_MODIFIED,
+            headers=common_headers,
+        )
+
+    return Response(
+        content=payload,
+        media_type=spec.media_type,
+        headers={
+            **common_headers,
+            "Content-Disposition": (
+                f'inline; filename="prospect_brief.v{version}.{format}"'
+            ),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

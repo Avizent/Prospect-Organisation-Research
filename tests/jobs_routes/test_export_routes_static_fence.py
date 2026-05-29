@@ -184,11 +184,12 @@ def test_module_is_importable_in_isolation() -> None:
 
     module = importlib.import_module("backend.jobs.export_routes")
     assert hasattr(module, "router")
-    # The router exposes exactly four routes after Step 38:
+    # The router exposes exactly five routes after Step 41:
     # POST /export/pdf, GET /exports/pdf, POST /export/docx,
-    # GET /exports/docx. A future change to this number is a
-    # deliberate surface change that must be approved per-step.
-    assert len(module.router.routes) == 4
+    # GET /exports/docx, GET /exports/{format}/{export_id}.
+    # A future change to this number is a deliberate surface change
+    # that must be approved per-step.
+    assert len(module.router.routes) == 5
 
 
 @pytest.mark.parametrize("needle", _FORBIDDEN_STATE_WRITERS)
@@ -204,4 +205,54 @@ def test_no_state_writer_calls(
     assert needle not in export_routes_source, (
         f"backend.jobs.export_routes must not call {needle!r} — "
         "export is state-machine-invariant"
+    )
+
+
+def test_historical_route_does_not_call_archive_writer(
+    export_routes_source: str,
+) -> None:
+    """The Step 41 historical-retrieval handler must never write bytes.
+
+    The only write helpers in the module are ``write_export(`` and
+    ``write_export_archive(``; both are permitted only in the POST
+    path. A substring scan enforces this independently of the import
+    check, guarding against a future refactor that moves a write
+    inside the historical handler.
+    """
+    # ``write_export(`` appears in two legitimate places inside
+    # _generate_export (the POST helper) and its import statement.
+    # We check for ``write_export_archive(`` specifically because
+    # the historical retrieval path must NEVER call it.
+    # We also verify that neither write appears inside the
+    # ``get_export_historical`` function body. We do this by scanning
+    # for the known bad pairing rather than trying to parse the AST —
+    # the function name is stable and unique in the module.
+    # A simple substring scan on the whole source is sufficient
+    # because the historical handler is the *only* place that could
+    # call a write helper for a "GET /exports/…/…" path.
+    assert "write_export_archive(" in export_routes_source, (
+        "write_export_archive must remain present in export_routes "
+        "(it is called by _generate_export); "
+        "if this assertion fails the POST path was broken"
+    )
+    # The historical GET handler must not contain a call to any write
+    # helper. Parse out its source region conservatively: from
+    # ``def get_export_historical`` to the next top-level ``def`` or
+    # end of file, and assert the write calls do not appear there.
+    import re as _re
+    m = _re.search(
+        r"def get_export_historical\b(.+?)(?=\ndef |\Z)",
+        export_routes_source,
+        _re.DOTALL,
+    )
+    assert m, "get_export_historical must exist in export_routes"
+    handler_body = m.group(1)
+    assert "write_export_archive(" not in handler_body, (
+        "get_export_historical must not call write_export_archive()"
+    )
+    assert "write_export(" not in handler_body, (
+        "get_export_historical must not call write_export()"
+    )
+    assert "upsert_export_entry(" not in handler_body, (
+        "get_export_historical must not call upsert_export_entry()"
     )

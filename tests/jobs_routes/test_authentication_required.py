@@ -150,6 +150,15 @@ _ROUTES: list[tuple[str, str, dict | None]] = [
         "/api/jobs/00000000-0000-4000-8000-000000000000/exports/docx",
         None,
     ),
+    (
+        "GET",
+        # Step 41 historical retrieval — format and export_id are path
+        # params; the auth middleware fires before path validation so
+        # the literal brace strings are fine as placeholder values.
+        "/api/jobs/00000000-0000-4000-8000-000000000000"
+        "/exports/{format}/{export_id}",
+        None,
+    ),
 ]
 
 

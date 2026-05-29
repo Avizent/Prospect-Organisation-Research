@@ -1026,6 +1026,70 @@ def export_archive_path_for(
 
 
 # ---------------------------------------------------------------------------
+# Step 41 — historical export entry lookup
+# ---------------------------------------------------------------------------
+
+def _is_valid_export_id(s: Any) -> bool:
+    """Return ``True`` iff ``s`` is a 64-char lowercase-hex SHA-256 string.
+
+    Used to reject malformed ``export_id`` values before touching disk,
+    preventing enumeration attacks through path-traversal-safe but
+    information-leaking 500 errors. Uppercase hex and partial hashes are
+    both rejected.
+    """
+    return (
+        isinstance(s, str)
+        and len(s) == 64
+        and all(c in "0123456789abcdef" for c in s)
+    )
+
+
+def find_export_entry(
+    job_id: str, fmt: str, export_id: str,
+) -> dict[str, Any] | None:
+    """Return the v3-projected ``exports[]`` entry for ``(fmt, export_id)``.
+
+    Reads the on-disk manifest (raw), projects it through
+    :func:`_project_manifest_v3` *in memory*, then scans ``exports[]``
+    for an entry whose ``format == fmt`` AND ``export_id == export_id``.
+
+    Returns the projected entry dict, or ``None`` when:
+
+    * the manifest file does not exist,
+    * ``export_id`` is malformed (not a 64-char lowercase-hex string),
+    * no matching entry is found in the manifest.
+
+    The projection is in-memory only — this function never writes to
+    disk. It is safe to call from read-only route handlers.
+
+    Raises :class:`ValueError` if the ``job_id`` is not a valid UUID or
+    if ``fmt`` is not in :data:`_EXPORT_FORMATS`. Uses
+    :class:`json.JSONDecodeError` propagation for a corrupt manifest
+    (callers map this to 500 ``manifest_corrupt``).
+    """
+    if not isinstance(fmt, str) or fmt not in _EXPORT_FORMATS:
+        raise ValueError(
+            f"unknown export format {fmt!r}; "
+            f"expected one of {sorted(_EXPORT_FORMATS)}"
+        )
+    if not _is_valid_export_id(export_id):
+        return None
+    try:
+        raw = read_document_manifest(job_id)
+    except JobNotFound:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    projected = _project_manifest_v3(raw)
+    for entry in projected.get("exports") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("format") == fmt and entry.get("export_id") == export_id:
+            return dict(entry)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # v3 manifest projector — lazy migration from v1/v2 on read
 # ---------------------------------------------------------------------------
 

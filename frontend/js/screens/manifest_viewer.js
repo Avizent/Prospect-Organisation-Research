@@ -565,12 +565,168 @@ function _renderDocxPanel(container, jobId, manifest, lifecycle) {
 }
 
 
+// ---------------------------------------------------------------------------
+// Step 41: export history panel
+// ---------------------------------------------------------------------------
+//
+// A read-only table of every historical export entry for each format,
+// newest first. Visible only when at least one export entry exists.
+// Download links point at the Step 41 historical-retrieval endpoint
+// ``GET /api/jobs/{id}/exports/{format}/{export_id}`` using the
+// ``download`` attribute so the browser streams the file to disk
+// immediately, independent of the current "latest" alias.
+//
+// No state mutation. No generate/regenerate controls. No polling.
+// All values go through textContent (via el()) — direct DOM assignment
+// only via the textContent property, never via unsafe property assignment.
+
+// How many hex chars to show in the abbreviated ID column.
+const _EXPORT_ID_SHORT_LEN = 12;
+
+function _shortId(exportId) {
+  // Display only the first _EXPORT_ID_SHORT_LEN hex chars + "…" so the
+  // table stays readable; the full 64-char hash is available in the title
+  // tooltip.
+  if (typeof exportId !== "string" || exportId.length < _EXPORT_ID_SHORT_LEN) {
+    return exportId || "—";
+  }
+  return exportId.slice(0, _EXPORT_ID_SHORT_LEN) + "…";
+}
+
+
+function _renderExportHistoryForFormat(jobId, manifest, fmt) {
+  const exports = Array.isArray(manifest.exports) ? manifest.exports : [];
+  const latest_map = manifest.latest_export_id
+    && typeof manifest.latest_export_id === "object"
+    ? manifest.latest_export_id : {};
+
+  // Collect entries for this format, sort newest first (version DESC).
+  const entries = exports
+    .filter(e => e && e.format === fmt)
+    .sort((a, b) => (b.version || 0) - (a.version || 0));
+
+  if (entries.length === 0) return null;
+
+  const section = el("section", {
+    class: `manifest-export-history manifest-export-history-${fmt}`,
+  });
+
+  const caption = fmt.toUpperCase();
+  const table = el("table", { class: "export-history-table" });
+  const captionEl = document.createElement("caption");
+  captionEl.textContent = `Historical exports for ${caption}`;
+  table.appendChild(captionEl);
+
+  // Header row.
+  const thead = el("thead", {}, [
+    el("tr", {}, [
+      el("th", { text: "Version" }),
+      el("th", { text: "Created" }),
+      el("th", { text: "Export ID" }),
+      el("th", { text: "Status" }),
+      el("th", { text: "Download" }),
+    ]),
+  ]);
+  table.appendChild(thead);
+
+  const tbody = el("tbody");
+  for (const entry of entries) {
+    const version = entry.version != null ? String(entry.version) : "—";
+    const createdAt = typeof entry.generated_at === "string"
+      ? entry.generated_at : "—";
+    const exportId = typeof entry.export_id === "string"
+      ? entry.export_id : (typeof entry.sha256 === "string" ? entry.sha256 : "");
+    const isLatest = exportId && latest_map[fmt] === exportId;
+
+    // Status chip.
+    const chipClass = isLatest
+      ? "export-history-chip export-history-chip-latest"
+      : "export-history-chip export-history-chip-superseded";
+    const chipText = isLatest ? "Latest" : "Superseded";
+    const chip = el("span", { class: chipClass, text: chipText });
+
+    // Version cell — bold if latest.
+    const versionCell = el("td", {});
+    const versionEl = isLatest
+      ? el("strong", { text: version })
+      : el("span", { text: version });
+    versionCell.appendChild(versionEl);
+
+    // Export ID cell with tooltip for full hash.
+    const idCell = el("td", {});
+    const codeEl = el("code", {
+      class: "export-history-id",
+      text: _shortId(exportId),
+    });
+    if (exportId) codeEl.title = exportId;
+    idCell.appendChild(codeEl);
+
+    // Download anchor — only if we have a valid export_id.
+    const downloadCell = el("td", {});
+    if (exportId) {
+      const href = `/api/jobs/${encodeURIComponent(jobId)}/exports/${encodeURIComponent(fmt)}/${encodeURIComponent(exportId)}`;
+      const dlLink = el("a", {
+        class: `btn-download-${fmt}-historical`,
+        href,
+        text: `Download v${version}`,
+      });
+      dlLink.setAttribute("download", `prospect_brief.v${version}.${fmt}`);
+      dlLink.setAttribute("aria-label", `Download ${fmt.toUpperCase()} version ${version} from ${createdAt}`);
+      downloadCell.appendChild(dlLink);
+    }
+
+    tbody.appendChild(el("tr", {}, [
+      versionCell,
+      el("td", { text: createdAt }),
+      idCell,
+      el("td", {}, [chip]),
+      downloadCell,
+    ]));
+  }
+  table.appendChild(tbody);
+  section.appendChild(table);
+  return section;
+}
+
+
+function _renderExportHistory(jobId, manifest) {
+  const exports = Array.isArray(manifest.exports) ? manifest.exports : [];
+  if (exports.length === 0) return null;
+
+  const wrap = el("section", { class: "manifest-export-history-panel" }, [
+    el("h3", { text: "Export history" }),
+    el("p", {
+      class: "muted",
+      text: "Older versions remain downloadable for audit.",
+    }),
+  ]);
+
+  let anyRendered = false;
+  // Render in canonical format order so the panel layout is stable.
+  for (const fmt of ["pdf", "docx"]) {
+    const section = _renderExportHistoryForFormat(jobId, manifest, fmt);
+    if (section) {
+      wrap.appendChild(section);
+      anyRendered = true;
+    }
+  }
+
+  return anyRendered ? wrap : null;
+}
+
+
 function _renderExports(container, jobId, manifest, lifecycle) {
   const wrap = el("section", { class: "manifest-exports" }, [
     el("h3", { text: "Exports" }),
   ]);
   wrap.appendChild(_renderPdfPanel(container, jobId, manifest, lifecycle));
   wrap.appendChild(_renderDocxPanel(container, jobId, manifest, lifecycle));
+
+  // Step 41: export history panel appended below the per-format
+  // generate/download controls. Null when no entries exist.
+  const history = _renderExportHistory(jobId, manifest);
+  if (history) wrap.appendChild(history);
+
   return wrap;
 }
 

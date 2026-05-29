@@ -34,6 +34,7 @@ import pytest
 from backend.jobs.storage import (
     JobNotFound,
     export_path_for,
+    find_export_entry,
     read_document_manifest,
     read_export_bytes,
     upsert_export_entry,
@@ -344,3 +345,100 @@ def test_upsert_rejects_entry_without_format(
     write_document_manifest(job_id, _v2_manifest(job_id))
     with pytest.raises(ValueError):
         upsert_export_entry(job_id, {"filename": "x.pdf"})
+
+
+# ---------------------------------------------------------------------------
+# find_export_entry (Step 41)
+# ---------------------------------------------------------------------------
+
+
+def _seed_with_entry(job_id: str, sha: str) -> dict:
+    """Write a v2 manifest, upsert one PDF entry, return final entry."""
+    write_document_manifest(job_id, _v2_manifest(job_id))
+    entry = {
+        "format": "pdf",
+        "filename": "prospect_brief.pdf",
+        "byte_length": 1024,
+        "sha256": sha,
+        "source_markdown_sha256": "a" * 64,
+        "generated_at": "2026-05-29T00:00:00Z",
+        "exporter_version": "0.2.0",
+        "template_version": "0.1.0",
+        "renderer": {"name": "weasyprint", "version": "68.1"},
+        "markdown_renderer": {"name": "markdown", "version": "3.10.2"},
+        "warnings": [],
+    }
+    final, _ = upsert_export_entry(job_id, entry)
+    return final
+
+
+def test_find_export_entry_returns_entry_when_present(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    final = _seed_with_entry(job_id, "f" * 64)
+    result = find_export_entry(job_id, "pdf", "f" * 64)
+    assert result is not None
+    assert result["export_id"] == "f" * 64
+    assert result["version"] == 1
+    assert result["format"] == "pdf"
+
+
+def test_find_export_entry_returns_none_when_no_match(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    _seed_with_entry(job_id, "f" * 64)
+    # Different sha → no match.
+    assert find_export_entry(job_id, "pdf", "e" * 64) is None
+
+
+def test_find_export_entry_returns_none_when_manifest_missing(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    # No manifest written — must return None, not raise.
+    assert find_export_entry(job_id, "pdf", "f" * 64) is None
+
+
+def test_find_export_entry_rejects_malformed_export_id(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    _seed_with_entry(job_id, "f" * 64)
+    # Too short.
+    assert find_export_entry(job_id, "pdf", "f" * 10) is None
+    # Too long.
+    assert find_export_entry(job_id, "pdf", "f" * 65) is None
+    # Non-hex.
+    assert find_export_entry(job_id, "pdf", "g" * 64) is None
+    # Uppercase (not accepted even though it is a valid hex string in
+    # some conventions — we require lowercase to match the stored value).
+    assert find_export_entry(job_id, "pdf", "F" * 64) is None
+    # Not a string at all.
+    assert find_export_entry(job_id, "pdf", None) is None  # type: ignore[arg-type]
+
+
+def test_find_export_entry_raises_on_unknown_format(
+    isolated_jobs_root: Path,
+) -> None:
+    job_id = _new_job_id()
+    write_document_manifest(job_id, _v2_manifest(job_id))
+    with pytest.raises(ValueError):
+        find_export_entry(job_id, "xlsx", "f" * 64)
+
+
+def test_find_export_entry_projects_legacy_v1_manifest(
+    isolated_jobs_root: Path,
+) -> None:
+    """A legacy v1 manifest (no ``exports`` key) is projected to v3
+    in memory without an on-disk write; the function returns None
+    since the projected array is empty, not an exception."""
+    job_id = _new_job_id()
+    write_document_manifest(job_id, {**_V1_MANIFEST, "job_id": job_id})
+    # v1 manifest has no exports — should return None, no on-disk mutation.
+    assert find_export_entry(job_id, "pdf", "f" * 64) is None
+    # Disk still has v1 (no upsert happened).
+    on_disk = read_document_manifest(job_id)
+    assert on_disk.get("schema_version") == 1
+    assert "exports" not in on_disk
