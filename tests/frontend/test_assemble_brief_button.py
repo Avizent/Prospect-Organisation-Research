@@ -478,7 +478,6 @@ def test_handler_redirects_to_login_on_401(inspector_src: str) -> None:
 _FORBIDDEN_SUBSTRINGS = (
     "delivery",
     "m365",
-    "docx",
     "outlook",
     "keychain",
     "anthropic",
@@ -506,3 +505,42 @@ def test_no_local_or_session_storage(inspector_src: str) -> None:
     session cookie is HttpOnly and JS never reads it."""
     assert "localStorage" not in inspector_src
     assert "sessionStorage" not in inspector_src
+
+
+def test_assemble_handler_does_not_touch_docx(
+    inspector_src: str,
+) -> None:
+    """The ``_onAssembleBrief`` handler must never reference DOCX
+    generation. Step 42 adds DOCX support to the file via a separate
+    ``_onGenerateDocuments`` handler; this targeted check confirms the
+    assembly handler stays narrowly scoped.
+
+    We extract the ``_onAssembleBrief`` function body via brace
+    matching (same technique used by Step 27's equivalent test) so
+    Step 42's legitimate DOCX references in ``_onGenerateDocuments``
+    do not cause false positives.
+    """
+    import re as _re
+    m = _re.search(
+        r"async\s+function\s+_onAssembleBrief\s*\([^)]*\)\s*\{",
+        inspector_src,
+    )
+    assert m is not None, "_onAssembleBrief not found in job_status.js"
+    start = m.end() - 1
+    depth = 0
+    end = None
+    for i in range(start, len(inspector_src)):
+        ch = inspector_src[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    assert end is not None, "could not find closing brace of _onAssembleBrief"
+    body = inspector_src[start:end + 1]
+    assert "docx" not in body.lower(), (
+        "_onAssembleBrief must not reference 'docx' — DOCX generation "
+        "belongs exclusively to the _onGenerateDocuments pipeline handler"
+    )

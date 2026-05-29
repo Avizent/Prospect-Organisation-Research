@@ -198,6 +198,76 @@ async function _onRunStage2(container, params, button, statusNode) {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// One-click document generation workflow (Step 42)
+// ---------------------------------------------------------------------------
+//
+// ``_onGenerateDocuments`` runs the full approved-job pipeline in a
+// single click:
+//   Stage 2  →  assemble brief  →  PDF export  →  DOCX export
+//
+// On success the operator is automatically redirected to the manifest
+// viewer where the export download links are ready.
+//
+// On any step failure the chain stops immediately, a human-readable
+// error is shown in the ``gen-docs-status`` live region, and the
+// button is re-enabled so the operator can retry without reloading.
+
+function _renderGenDocsStatus(node, kind, message) {
+  clear(node);
+  node.dataset.kind = kind;
+  node.appendChild(el("p", { text: message }));
+}
+
+async function _onGenerateDocuments(container, params, button, statusNode) {
+  const id = params.id;
+  button.disabled = true;
+  const originalLabel = button.textContent;
+
+  try {
+    _renderGenDocsStatus(statusNode, "info", "Running Stage 2…");
+    button.textContent = "Running Stage 2…";
+    await api.runStage2(id, {
+      knowledge_bundle: _STAGE2_KNOWLEDGE_BUNDLE,
+      user_context: _STAGE2_USER_CONTEXT,
+    });
+
+    _renderGenDocsStatus(statusNode, "info", "Assembling brief…");
+    button.textContent = "Assembling brief…";
+    await api.assembleBrief(id);
+
+    _renderGenDocsStatus(statusNode, "info", "Exporting PDF…");
+    button.textContent = "Exporting PDF…";
+    await api.runPdfExport(id);
+
+    _renderGenDocsStatus(statusNode, "info", "Exporting DOCX…");
+    button.textContent = "Exporting DOCX…";
+    await api.runDocxExport(id);
+
+    _renderGenDocsStatus(statusNode, "success", "Complete");
+    toast("Documents generated", { kind: "success" });
+    navigate(`#/jobs/${encodeURIComponent(id)}/manifest`);
+  } catch (err) {
+    button.disabled = false;
+    button.textContent = originalLabel;
+    if (err instanceof ApiError && err.status === 401) {
+      navigate("#/login");
+      return;
+    }
+    if (err instanceof ApiError && err.status === 503) {
+      _renderGenDocsStatus(statusNode, "warn", _STAGE2_DISABLED_MESSAGE);
+      return;
+    }
+    const msg = err instanceof ApiError
+      ? `Document generation failed (HTTP ${err.status}): ${formatDetail(err.detail)}`
+      : `Document generation failed: ${err && err.message ? err.message : String(err)}`;
+    _renderGenDocsStatus(statusNode, "error", msg);
+    toast(msg, { kind: "error" });
+  }
+}
+
+
 export async function render(container, params) {
   const id = params.id;
   clear(container);
@@ -300,6 +370,7 @@ export async function render(container, params) {
   // route; everything else on this screen is read-only.
   let stage2Status = null;
   let assemblyStatus = null;
+  let generateDocsStatus = null;
   if (snapshot.current_state === "approved") {
     const stage2Button = el("button", {
       class: "btn btn-primary",
@@ -338,6 +409,28 @@ export async function render(container, params) {
       });
       actions.appendChild(assembleButton);
     }
+
+    // Step 42: one-click document generation pipeline. Runs Stage 2 →
+    // assemble → PDF → DOCX and redirects to the manifest viewer on
+    // success. The button appears for ALL approved jobs — no additional
+    // artefact gate is needed because Stage 2 surfaces any missing-input
+    // errors through the normal error path.
+    const generateDocsButton = el("button", {
+      class: "btn btn-primary",
+      type: "button",
+      text: "Generate Documents",
+    });
+    generateDocsStatus = el("div", {
+      class: "gen-docs-status",
+      role: "status",
+      "aria-live": "polite",
+    });
+    generateDocsButton.addEventListener("click", () => {
+      _onGenerateDocuments(
+        container, params, generateDocsButton, generateDocsStatus,
+      );
+    });
+    actions.appendChild(generateDocsButton);
   }
 
   actions.appendChild(el("a", {
@@ -388,6 +481,7 @@ export async function render(container, params) {
   container.appendChild(actions);
   if (stage2Status) container.appendChild(stage2Status);
   if (assemblyStatus) container.appendChild(assemblyStatus);
+  if (generateDocsStatus) container.appendChild(generateDocsStatus);
   container.appendChild(transitions);
   if (lastError) container.appendChild(lastError);
 }
