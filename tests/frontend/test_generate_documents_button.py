@@ -347,13 +347,21 @@ def test_status_node_has_aria_live(inspector_src: str) -> None:
 
 
 def test_status_node_appended_to_container(inspector_src: str) -> None:
-    """The ``generateDocsStatus`` node must be appended to the
-    container so it appears in the DOM when the button is clicked."""
+    """The ``generateDocsStatus`` node must be added to the DOM (either via
+    container.appendChild or via the pageChildren array that is appended to
+    the container) so it appears when the button is clicked."""
     assert "generateDocsStatus" in inspector_src, (
         "generateDocsStatus variable must be declared and appended"
     )
-    assert "container.appendChild(generateDocsStatus)" in inspector_src, (
-        "generateDocsStatus must be appended to the container"
+    # Accept either the direct-append pattern or the page-wrapper pattern.
+    appended = (
+        "container.appendChild(generateDocsStatus)" in inspector_src
+        or "pageChildren.push(generateDocsStatus)" in inspector_src
+    )
+    assert appended, (
+        "generateDocsStatus must be added to the DOM — either via "
+        "container.appendChild(generateDocsStatus) or "
+        "pageChildren.push(generateDocsStatus)"
     )
 
 

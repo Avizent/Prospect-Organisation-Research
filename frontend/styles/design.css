@@ -471,7 +471,84 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * 9. Print isolation — A4/export output must not inherit shell styles
+ * 9. Progress timeline — heading row and task sequence additions (step 47)
+ * --------------------------------------------------------------------------- */
+
+/* Heading row: title+subtitle on the left, large percentage on the right */
+.progress-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.progress-heading-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.progress-heading {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.progress-heading-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Large overall percentage figure shown top-right of the card */
+.progress-overall-pct {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--teal);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* "Task Execution Sequence" section heading above the stage list */
+.task-seq-heading {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 14px 0 6px;
+}
+
+/* Zero-padded task number shown before each stage label */
+.task-number {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  min-width: 20px;
+  flex-shrink: 0;
+}
+
+/* Wrapper for the stage label + hint text */
+.task-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* One-line hint beneath the stage label */
+.task-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------------
+ * 10. Print isolation — A4/export output must not inherit shell styles
  * --------------------------------------------------------------------------- */
 
 @media print {

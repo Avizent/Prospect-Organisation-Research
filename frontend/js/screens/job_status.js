@@ -334,21 +334,22 @@ const _PAST_APPROVAL_STATES = new Set([
 //   virtual — special done-condition token:
 //               "submitted"  → always done once the job exists
 //               "approval"   → done once the job passes the approval gate
+//   hint    — one-line description of what this task does
 //
 // Stages sharing the same artefact key (Exporting PDF / Exporting DOCX /
 // Delivery-ready all use document_manifest) will flip simultaneously — this
 // is the honest behaviour given the available backend data.
 const _TIMELINE_STAGES = [
-  { label: "Submitted",            key: null,                virtual: "submitted" },
-  { label: "Researching company",  key: "research_dossier",  virtual: null       },
-  { label: "Finding contacts",     key: "contacts",          virtual: null       },
-  { label: "Assessing needs",      key: "needs_assessment",  virtual: null       },
-  { label: "Preparing briefing",   key: "briefing",          virtual: null       },
-  { label: "Awaiting approval",    key: null,                virtual: "approval"  },
-  { label: "Assembling brief",     key: "prospect_brief",    virtual: null       },
-  { label: "Exporting PDF",        key: "document_manifest", virtual: null       },
-  { label: "Exporting DOCX",       key: "document_manifest", virtual: null       },
-  { label: "Delivery-ready",       key: "document_manifest", virtual: null       },
+  { label: "Submitted",            key: null,                virtual: "submitted", hint: "Job created and queued for processing"              },
+  { label: "Researching company",  key: "research_dossier",  virtual: null,        hint: "Gathering company intelligence from public sources"  },
+  { label: "Finding contacts",     key: "contacts",          virtual: null,        hint: "Identifying key decision-makers and stakeholders"    },
+  { label: "Assessing needs",      key: "needs_assessment",  virtual: null,        hint: "Analysing business challenges and technology gaps"   },
+  { label: "Preparing briefing",   key: "briefing",          virtual: null,        hint: "Compiling research into a structured briefing"       },
+  { label: "Awaiting approval",    key: null,                virtual: "approval",  hint: "Operator review and approval required"              },
+  { label: "Assembling brief",     key: "prospect_brief",    virtual: null,        hint: "Rendering the Markdown prospect brief"              },
+  { label: "Exporting PDF",        key: "document_manifest", virtual: null,        hint: "Converting brief to PDF format"                     },
+  { label: "Exporting DOCX",       key: "document_manifest", virtual: null,        hint: "Converting brief to Word document format"           },
+  { label: "Delivery-ready",       key: "document_manifest", virtual: null,        hint: "All documents ready for delivery"                   },
 ];
 
 // Derive per-stage completion status from the snapshot's available_artefacts
@@ -478,18 +479,23 @@ function _renderProgressTimeline(snapshot) {
     max: 100,
   });
 
-  const stageRows = stages.map(stage => {
+  const stageRows = stages.map((stage, idx) => {
     const icon = stage.status === _TS_DONE    ? "✓"
                : stage.status === _TS_ACTIVE  ? "…"
                : stage.status === _TS_FAILED  ? "✗"
                : stage.status === _TS_WAITING ? "⏸"
                : "·";
     const badgeText = _BADGE_LABELS[stage.status] || stage.status;
-    // progress-stage-main is a block wrapper so icon/label/badge render
+    const taskNum = String(idx + 1).padStart(2, "0");
+    // progress-stage-main is a block wrapper so icon/num/info/badge render
     // on one line and are clearly separated from the bar below them.
     const mainRow = el("div", { class: "progress-stage-main" }, [
       el("span", { class: "progress-stage-icon", text: icon }),
-      el("span", { class: "progress-stage-label", text: stage.label }),
+      el("span", { class: "task-number", text: taskNum }),
+      el("div", { class: "task-info" }, [
+        el("span", { class: "progress-stage-label", text: stage.label }),
+        el("span", { class: "task-hint", text: stage.hint || "" }),
+      ]),
       el("span", {
         class: `progress-stage-badge progress-stage-badge--${stage.status}`,
         text:  badgeText,
@@ -507,13 +513,23 @@ function _renderProgressTimeline(snapshot) {
     }, [mainRow, barDiv]);
   });
 
+  const headingRow = el("div", { class: "progress-heading-row" }, [
+    el("div", { class: "progress-heading-left" }, [
+      el("h3", { class: "progress-heading", text: "Aggregated Pipeline Progress" }),
+      el("span", { class: "progress-heading-sub",
+                   text: "Inferred from completed pipeline outputs" }),
+    ]),
+    el("span", { class: "progress-overall-pct", text: `${percent}%` }),
+  ]);
+
   const cardChildren = [
-    el("h3", { text: "Progress" }),
+    headingRow,
     el("div", { class: "progress-overall" }, [
       el("span", { class: "timeline-overall-label",
                    text:  `Overall progress: ${percent}%` }),
       overallBar,
     ]),
+    el("h4", { class: "task-seq-heading", text: "Task Execution Sequence" }),
     el("ul", { class: "progress-timeline" }, stageRows),
   ];
 
@@ -562,20 +578,15 @@ export async function render(container, params) {
 
   clear(container);
 
-  const header = el("section", { class: "job-header" }, [
-    el("h2", { text: snapshot.company_name }),
-    el("p", { class: "muted" }, [
-      el("span", { text: "URL: " }),
-      el("a", { href: snapshot.company_url, target: "_blank",
-                rel: "noopener noreferrer", text: snapshot.company_url }),
+  const header = el("div", { class: "page-header" }, [
+    el("div", {}, [
+      el("h2", { class: "page-title", text: snapshot.company_name }),
+      el("p", { class: "page-subtitle" }, [
+        el("a", { href: snapshot.company_url, target: "_blank",
+                  rel: "noopener noreferrer", text: snapshot.company_url }),
+      ]),
     ]),
-    el("p", { class: "muted",
-              text: `Job ID: ${snapshot.job_id}` }),
-    el("p", {}, [
-      el("span", { text: "Current state: " }),
-      el("strong", { text: snapshot.current_state }),
-    ]),
-    el("p", { class: "muted", text: `Created at: ${snapshot.created_at}` }),
+    el("span", { class: "badge", text: snapshot.current_state }),
   ]);
 
   const artefactList = el("ul", { class: "artefact-list" });
@@ -708,7 +719,7 @@ export async function render(container, params) {
     class: "btn btn-plain", href: "#/jobs/new", text: "Create another job",
   }));
 
-  const transitions = el("section", {}, [el("h3", { text: "Transitions" })]);
+  const transitions = el("section", {});
   if (!snapshot.transitions || snapshot.transitions.length === 0) {
     transitions.appendChild(el("p", { class: "muted",
                                       text: "(no transitions yet)" }));
@@ -746,16 +757,33 @@ export async function render(container, params) {
       ])
     : null;
 
-  container.appendChild(header);
-  container.appendChild(_renderProgressTimeline(snapshot));
-  container.appendChild(el("h3", { text: "Artefacts on disk" }));
-  container.appendChild(artefactList);
-  container.appendChild(actions);
-  if (stage2Status) container.appendChild(stage2Status);
-  if (assemblyStatus) container.appendChild(assemblyStatus);
-  if (generateDocsStatus) container.appendChild(generateDocsStatus);
-  container.appendChild(transitions);
-  if (lastError) container.appendChild(lastError);
+  const artefactsCard = el("div", { class: "card" }, [
+    el("div", { class: "card-header", text: "Artefacts on disk" }),
+    el("div", { class: "card-body" }, [artefactList]),
+  ]);
+
+  const actionsCard = el("div", { class: "card" }, [
+    el("div", { class: "card-body" }, [actions]),
+  ]);
+
+  const transitionsCard = el("div", { class: "card" }, [
+    el("div", { class: "card-header", text: "Transitions" }),
+    el("div", { class: "card-body" }, [transitions]),
+  ]);
+
+  const pageChildren = [
+    header,
+    _renderProgressTimeline(snapshot),
+    actionsCard,
+    artefactsCard,
+    transitionsCard,
+  ];
+  if (stage2Status) pageChildren.push(stage2Status);
+  if (assemblyStatus) pageChildren.push(assemblyStatus);
+  if (generateDocsStatus) pageChildren.push(generateDocsStatus);
+  if (lastError) pageChildren.push(lastError);
+
+  container.appendChild(el("div", { class: "page" }, pageChildren));
 
   // Poll while the job is in an active (running) state. setTimeout is used
   // so a slow response never queues a second in-flight request. The

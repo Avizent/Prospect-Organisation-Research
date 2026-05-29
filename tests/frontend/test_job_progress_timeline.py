@@ -220,10 +220,11 @@ def test_timeline_aria_label(timeline_body: str) -> None:
 
 
 def test_timeline_heading_present(timeline_body: str) -> None:
-    """A ``Progress`` heading must be present so operators can locate
-    the panel quickly."""
-    assert '"Progress"' in timeline_body, (
-        "_renderProgressTimeline must include a heading 'Progress'"
+    """An 'Aggregated Pipeline Progress' heading must be present so
+    operators can locate the panel quickly."""
+    assert '"Aggregated Pipeline Progress"' in timeline_body, (
+        "_renderProgressTimeline must include a heading "
+        "'Aggregated Pipeline Progress'"
     )
 
 
