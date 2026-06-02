@@ -1167,7 +1167,94 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * 13. Print isolation — A4/export output must not inherit shell styles
+ * 13. Login / Setup screens (Step 51)
+ * Centred auth card aligned to the design system.
+ * --------------------------------------------------------------------------- */
+
+.ls-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 32px 16px;
+}
+
+.ls-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 40px 36px;
+  width: 100%;
+  max-width: 400px;
+}
+
+.ls-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ls-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 2px;
+}
+
+.ls-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* Override inspector.css margin on .briefing-section when inside br-editor-column
+   — br-editor-column already uses gap: 16px so extra margin causes double spacing */
+.br-editor-column .briefing-section {
+  margin: 0;
+}
+
+/* Export history table alignment */
+.export-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.export-history-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.export-history-table td {
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.export-history-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Consistent focus ring across all nj-input / form-row inputs */
+.form-row input:focus,
+.form-row textarea:focus,
+.form-row select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+/* ---------------------------------------------------------------------------
+ * 14. Print isolation — A4/export output must not inherit shell styles
  * --------------------------------------------------------------------------- */
 
 @media print {

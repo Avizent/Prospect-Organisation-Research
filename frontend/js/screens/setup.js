@@ -16,7 +16,7 @@ export function render(container) {
   const banner = el("div", { class: "form-banner hidden", role: "alert" });
 
   const form = el("form", {
-    class: "auth-form",
+    class: "ls-form",
     onsubmit: async (event) => {
       event.preventDefault();
       banner.classList.add("hidden");
@@ -42,35 +42,52 @@ export function render(container) {
             banner.textContent = `Setup failed (HTTP ${err.status}).`;
           }
         } else {
-          banner.textContent = "Setup failed — unexpected error.";
+          banner.textContent = "Setup failed \u2014 unexpected error.";
         }
         banner.classList.remove("hidden");
       }
     },
   }, [
-    el("h2", { text: "First-run setup" }),
+    el("h2", { class: "ls-title", text: "First-run setup" }),
     el("p", {
-      class: "form-help",
+      class: "ls-subtitle",
       text:
         "Create the single admin account for this installation. "
         + "This screen disappears once setup is complete.",
     }),
     banner,
-    el("label", { class: "form-row" }, [
-      el("span", { text: "Username" }),
-      el("input", { name: "username", type: "text", required: true }),
+    el("div", { class: "nj-field" }, [
+      el("label", { class: "nj-label", for: "ls-setup-username",
+                    text: "Username" }),
+      el("input", {
+        id: "ls-setup-username",
+        class: "nj-input",
+        name: "username", type: "text", required: true,
+      }),
     ]),
-    el("label", { class: "form-row" }, [
-      el("span", { text: "Password" }),
-      el("input", { name: "password", type: "password", required: true }),
+    el("div", { class: "nj-field" }, [
+      el("label", { class: "nj-label", for: "ls-setup-password",
+                    text: "Password" }),
+      el("input", {
+        id: "ls-setup-password",
+        class: "nj-input",
+        name: "password", type: "password", required: true,
+      }),
     ]),
-    el("label", { class: "form-row" }, [
-      el("span", { text: "Recovery email (optional)" }),
-      el("input", { name: "recovery_email", type: "email" }),
+    el("div", { class: "nj-field" }, [
+      el("label", { class: "nj-label", for: "ls-setup-recovery",
+                    text: "Recovery email (optional)" }),
+      el("input", {
+        id: "ls-setup-recovery",
+        class: "nj-input",
+        name: "recovery_email", type: "email",
+      }),
     ]),
-    el("button", { type: "submit", class: "btn btn-primary",
+    el("button", { type: "submit", class: "btn btn-primary nj-submit",
                    text: "Create admin account" }),
   ]);
 
-  container.appendChild(form);
+  container.appendChild(el("div", { class: "ls-page" }, [
+    el("div", { class: "ls-card" }, [form]),
+  ]));
 }

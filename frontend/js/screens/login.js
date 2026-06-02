@@ -15,7 +15,7 @@ export function render(container) {
   const banner = el("div", { class: "form-banner hidden", role: "alert" });
 
   const form = el("form", {
-    class: "auth-form",
+    class: "ls-form",
     onsubmit: async (event) => {
       event.preventDefault();
       banner.classList.add("hidden");
@@ -32,31 +32,38 @@ export function render(container) {
               ? err.detail
               : `Sign-in failed (HTTP ${err.status}).`;
         } else {
-          banner.textContent = "Sign-in failed — unexpected error.";
+          banner.textContent = "Sign-in failed \u2014 unexpected error.";
         }
         banner.classList.remove("hidden");
       }
     },
   }, [
-    el("h2", { text: "Sign in" }),
+    el("h2", { class: "ls-title", text: "Sign in" }),
+    el("p", { class: "ls-subtitle", text: "ANS Prospect Intelligence Tool" }),
     banner,
-    el("label", { class: "form-row" }, [
-      el("span", { text: "Username" }),
+    el("div", { class: "nj-field" }, [
+      el("label", { class: "nj-label", for: "ls-username", text: "Username" }),
       el("input", {
+        id: "ls-username",
+        class: "nj-input",
         name: "username", type: "text", required: true,
         autocomplete: "username",
       }),
     ]),
-    el("label", { class: "form-row" }, [
-      el("span", { text: "Password" }),
+    el("div", { class: "nj-field" }, [
+      el("label", { class: "nj-label", for: "ls-password", text: "Password" }),
       el("input", {
+        id: "ls-password",
+        class: "nj-input",
         name: "password", type: "password", required: true,
         autocomplete: "current-password",
       }),
     ]),
-    el("button", { type: "submit", class: "btn btn-primary",
+    el("button", { type: "submit", class: "btn btn-primary nj-submit",
                    text: "Sign in" }),
   ]);
 
-  container.appendChild(form);
+  container.appendChild(el("div", { class: "ls-page" }, [
+    el("div", { class: "ls-card" }, [form]),
+  ]));
 }
