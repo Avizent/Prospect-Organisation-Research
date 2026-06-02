@@ -622,6 +622,7 @@ function _renderExportHistoryForFormat(jobId, manifest, fmt) {
     el("tr", {}, [
       el("th", { text: "Version" }),
       el("th", { text: "Created" }),
+      el("th", { text: "File Format" }),
       el("th", { text: "Export ID" }),
       el("th", { text: "Status" }),
       el("th", { text: "Download" }),
@@ -675,9 +676,14 @@ function _renderExportHistoryForFormat(jobId, manifest, fmt) {
       downloadCell.appendChild(dlLink);
     }
 
+    const formatBadgeEl = el("span", {
+      class: `export-format-badge export-format-badge--${fmt}`,
+      text: fmt.toUpperCase(),
+    });
     tbody.appendChild(el("tr", {}, [
       versionCell,
       el("td", { text: createdAt }),
+      el("td", {}, [formatBadgeEl]),
       idCell,
       el("td", {}, [chip]),
       downloadCell,
@@ -768,7 +774,54 @@ function _renderDeliveryReadyPanel(jobId, manifest) {
   const pdfEntry = _findPdfExportEntry(manifest);
   const docxEntry = _findDocxExportEntry(manifest);
 
+  // Hero download cards — styled primary/secondary anchors.
+  const pdfCard = pdfEntry
+    ? el("a", {
+        class: "dr-download-card dr-download-card--primary btn-download-pdf-delivery",
+        href: `/api/jobs/${encodeURIComponent(jobId)}/exports/pdf`,
+        "aria-label": "Download latest PDF",
+      }, [
+        el("span", { class: "dr-download-icon", text: "↓" }),
+        el("div", { class: "dr-download-info" }, [
+          el("span", { class: "dr-download-title", text: "Download PDF Document" }),
+          el("span", { class: "dr-download-sub", text: "Formatted report with styles" }),
+        ]),
+      ])
+    : el("div", { class: "dr-download-card dr-download-card--missing" }, [
+        el("span", { class: "delivery-file-missing", text: "Missing PDF" }),
+      ]);
+
+  const docxCard = docxEntry
+    ? el("a", {
+        class: "dr-download-card dr-download-card--secondary btn-download-docx-delivery",
+        href: `/api/jobs/${encodeURIComponent(jobId)}/exports/docx`,
+        "aria-label": "Download latest DOCX",
+      }, [
+        el("span", { class: "dr-download-icon", text: "↓" }),
+        el("div", { class: "dr-download-info" }, [
+          el("span", { class: "dr-download-title", text: "Download DOCX Document" }),
+          el("span", { class: "dr-download-sub", text: "Microsoft Word compatible" }),
+        ]),
+      ])
+    : el("div", { class: "dr-download-card dr-download-card--missing" }, [
+        el("span", { class: "delivery-file-missing", text: "Missing DOCX" }),
+      ]);
+
+  const hero = el("div", { class: "dr-hero" }, [
+    el("div", { class: "dr-check-circle", text: "\u2713" }),
+    el("p", { class: "dr-hero-eyebrow", text: "INTELLIGENCE COMPLETE" }),
+    el("h2", { class: "dr-hero-title", text: "Briefing Ready for Hand-off" }),
+    el("p", {
+      class: "dr-hero-subtitle",
+      text: manifest && manifest.company_name
+        ? `The sales briefing for ${manifest.company_name} is formatted, verified, and packaged.`
+        : "The sales briefing documents are formatted, verified, and packaged.",
+    }),
+    el("div", { class: "dr-downloads" }, [pdfCard, docxCard]),
+  ]);
+
   const children = [
+    hero,
     el("h3", { text: "Delivery-ready files" }),
     el("p", {
       class: "delivery-instruction",
@@ -779,38 +832,34 @@ function _renderDeliveryReadyPanel(jobId, manifest) {
     }),
   ];
 
+  // Accessible fallback list — screen reader supplement to the hero cards.
   const fileList = el("ul", { class: "delivery-file-list" });
-
-  // PDF row — download link when available; missing notice otherwise.
   if (pdfEntry) {
-    const pdfLink = el("a", {
-      class: "btn-download-pdf-delivery",
-      href: `/api/jobs/${encodeURIComponent(jobId)}/exports/pdf`,
-      text: "Download latest PDF",
-    });
-    fileList.appendChild(el("li", { class: "delivery-file-item" }, [pdfLink]));
+    fileList.appendChild(el("li", { class: "delivery-file-item" }, [
+      el("a", {
+        href: `/api/jobs/${encodeURIComponent(jobId)}/exports/pdf`,
+        text: "Download latest PDF",
+      }),
+    ]));
   } else {
     fileList.appendChild(el("li", {
       class: "delivery-file-item delivery-file-missing",
       text: "Missing PDF",
     }));
   }
-
-  // DOCX row — download link when available; missing notice otherwise.
   if (docxEntry) {
-    const docxLink = el("a", {
-      class: "btn-download-docx-delivery",
-      href: `/api/jobs/${encodeURIComponent(jobId)}/exports/docx`,
-      text: "Download latest DOCX",
-    });
-    fileList.appendChild(el("li", { class: "delivery-file-item" }, [docxLink]));
+    fileList.appendChild(el("li", { class: "delivery-file-item" }, [
+      el("a", {
+        href: `/api/jobs/${encodeURIComponent(jobId)}/exports/docx`,
+        text: "Download latest DOCX",
+      }),
+    ]));
   } else {
     fileList.appendChild(el("li", {
       class: "delivery-file-item delivery-file-missing",
       text: "Missing DOCX",
     }));
   }
-
   children.push(fileList);
 
   // When either file is missing, direct the operator back to generate them.
@@ -881,19 +930,21 @@ export async function render(container, params) {
 
   clear(container);
 
+  const pageChildren = [];
+
   // Header strip — keep the operator anchored to the job they are
   // viewing the manifest for, with a sibling link to the brief viewer.
-  container.appendChild(el("section", { class: "manifest-header" }, [
+  pageChildren.push(el("section", { class: "manifest-header" }, [
     el("h2", { text: "Document manifest" }),
     el("p", { class: "muted", text: `Job ID: ${id}` }),
     el("p", {}, [
       _backLink(id),
-      el("span", { text: " · " }),
+      el("span", { text: " \u00b7 " }),
       el("a", {
         href: `#/jobs/${encodeURIComponent(id)}/brief`,
         text: "View Brief",
       }),
-      el("span", { text: " · " }),
+      el("span", { text: " \u00b7 " }),
       // Secondary link — operators who want the raw JSON file can grab
       // it without leaving the inspector. Opens in a new tab.
       el("a", {
@@ -908,16 +959,32 @@ export async function render(container, params) {
   // Amendment 1: prominent error banner above every panel when
   // ``source_markdown_drift`` is present.
   const driftBanner = _renderSourceDriftBanner(lifecycle);
-  if (driftBanner) container.appendChild(driftBanner);
+  if (driftBanner) pageChildren.push(driftBanner);
 
   // Step 43: delivery-ready panel — placed near the top so the operator
   // sees the download links immediately after a Generate Documents run.
-  container.appendChild(_renderDeliveryReadyPanel(id, manifest));
+  pageChildren.push(_renderDeliveryReadyPanel(id, manifest));
 
-  container.appendChild(_renderSummary(manifest, lifecycle));
-  container.appendChild(_renderOutputs(manifest));
-  container.appendChild(_renderArtefacts(manifest));
-  container.appendChild(_renderSections(manifest));
-  container.appendChild(_renderExports(container, id, manifest, lifecycle));
-  container.appendChild(_renderWarnings(manifest));
+  pageChildren.push(_renderSummary(manifest, lifecycle));
+  pageChildren.push(_renderOutputs(manifest));
+  pageChildren.push(_renderArtefacts(manifest));
+  pageChildren.push(_renderSections(manifest));
+  pageChildren.push(_renderExports(container, id, manifest, lifecycle));
+  pageChildren.push(_renderWarnings(manifest));
+
+  // Step 48: footer navigation actions.
+  pageChildren.push(el("div", { class: "dr-footer-actions" }, [
+    el("a", {
+      class: "btn btn-secondary",
+      href: `#/jobs/${encodeURIComponent(id)}/brief`,
+      text: "Back to Briefing Review",
+    }),
+    el("a", {
+      class: "btn btn-ghost",
+      href: "#/jobs/new",
+      text: "Prepare Another Job",
+    }),
+  ]));
+
+  container.appendChild(el("div", { class: "page" }, pageChildren));
 }

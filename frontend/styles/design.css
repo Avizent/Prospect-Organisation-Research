@@ -548,7 +548,168 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * 10. Print isolation — A4/export output must not inherit shell styles
+ * 10. Delivery screen — hero, download cards, export badges (step 48)
+ * --------------------------------------------------------------------------- */
+
+/* Hero panel — check-mark, eyebrow, title, subtitle, download cards */
+.dr-hero {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 32px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+}
+
+.dr-check-circle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--teal-bg);
+  color: var(--teal-text);
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.dr-hero-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--teal-text);
+  margin: 0;
+}
+
+.dr-hero-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 4px 0 0;
+}
+
+.dr-hero-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+  max-width: 480px;
+}
+
+/* Download card row */
+.dr-downloads {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.dr-download-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  text-decoration: none;
+  min-width: 220px;
+  transition: box-shadow 80ms ease;
+}
+
+.dr-download-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.dr-download-card--primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+}
+
+.dr-download-card--primary:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+}
+
+.dr-download-card--secondary {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.dr-download-card--missing {
+  background: var(--surface-muted);
+  border-color: var(--border);
+  color: var(--text-muted);
+  cursor: default;
+  opacity: .6;
+}
+
+.dr-download-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.dr-download-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.dr-download-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dr-download-sub {
+  font-size: 11px;
+  opacity: .75;
+}
+
+/* Footer navigation actions */
+.dr-footer-actions {
+  display: flex;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+/* Export format badge in history table */
+.export-format-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.export-format-badge--pdf {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border-color: transparent;
+}
+
+.export-format-badge--docx {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  border-color: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+ * 11. Print isolation — A4/export output must not inherit shell styles
  * --------------------------------------------------------------------------- */
 
 @media print {
