@@ -709,7 +709,209 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * 11. Print isolation — A4/export output must not inherit shell styles
+ * 11. New Job screen — hero, two-column layout, form card (step 49)
+ * --------------------------------------------------------------------------- */
+
+/* Page wrapper */
+.nj-page {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* Hero — centred title + subtitle */
+.nj-hero {
+  text-align: center;
+  padding: 28px 0 20px;
+}
+
+.nj-hero-title {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 10px;
+  line-height: 1.25;
+}
+
+.nj-hero-subtitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 600px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+/* Two-column layout: form left, side panel right */
+.nj-layout {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .nj-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Form card */
+.nj-form-card {
+  padding: 0;
+}
+
+.nj-form-card .card-header,
+.nj-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 16px 20px 4px;
+  border: none;
+}
+
+.nj-card-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 0 20px 12px;
+  margin: 0;
+}
+
+/* Form inside the card */
+.nj-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 20px 20px;
+}
+
+.nj-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.nj-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.nj-input {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  transition: border-color 80ms ease;
+}
+
+.nj-input:focus {
+  border-color: var(--accent);
+}
+
+.nj-submit {
+  width: 100%;
+  justify-content: center;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+/* Side column */
+.nj-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* What happens next? */
+.nj-whatnext {
+  overflow: visible;
+}
+
+.nj-whatnext-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.nj-whatnext-step:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.nj-whatnext-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.nj-whatnext-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+}
+
+/* Operator tip */
+.nj-operator-tip {
+  background: var(--warning-bg);
+  border-color: #fcd34d;
+}
+
+.nj-tip-text {
+  font-size: 12px;
+  color: var(--warning-text);
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* Recent searches (optional — shown only when data exists) */
+.nj-recent {
+  margin-top: 4px;
+}
+
+.nj-recent-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.nj-recent-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--surface);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.nj-recent-item:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------------------
+ * 12. Print isolation — A4/export output must not inherit shell styles
  * --------------------------------------------------------------------------- */
 
 @media print {
