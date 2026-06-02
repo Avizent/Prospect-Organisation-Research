@@ -715,6 +715,46 @@ export async function render(container, params) {
     actions.appendChild(generateDocsButton);
   }
 
+  // Stage 1 trigger — visible only when the job is at "created".
+  // The button enqueues Stage 1 research via the backend; on success
+  // re-renders so the progress UI immediately reflects "researching".
+  // Polling continues as normal once the re-render fires.
+  if (snapshot.current_state === "created") {
+    const sweepButton = el("button", {
+      type: "button",
+      class: "btn btn-primary",
+      text: "Start Research Sweep",
+    });
+    const sweepStatus = el("div", {
+      class: "sweep-status",
+      role: "status",
+      "aria-live": "polite",
+    });
+    sweepButton.addEventListener("click", async () => {
+      sweepButton.disabled = true;
+      sweepButton.textContent = "Starting\u2026";
+      sweepStatus.textContent = "";
+      try {
+        await api.runStage1(id);
+        render(container, params);
+      } catch (err) {
+        sweepButton.disabled = false;
+        sweepButton.textContent = "Start Research Sweep";
+        if (err instanceof ApiError) {
+          sweepStatus.textContent =
+            typeof err.detail === "object" && err.detail !== null
+              ? (err.detail.reason ?? `Failed (HTTP ${err.status}).`)
+              : (err.detail ?? `Failed (HTTP ${err.status}).`);
+        } else {
+          sweepStatus.textContent =
+            "Unexpected error \u2014 check server logs.";
+        }
+      }
+    });
+    actions.appendChild(sweepButton);
+    actions.appendChild(sweepStatus);
+  }
+
   actions.appendChild(el("a", {
     class: "btn btn-plain", href: "#/jobs/new", text: "Create another job",
   }));

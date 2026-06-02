@@ -49,6 +49,7 @@ from backend.jobs.export_governance_routes import (
 )
 from backend.jobs.export_routes import router as export_routes_router
 from backend.jobs.routes import router as jobs_router
+from backend.jobs.stage1_routes import router as stage1_router  # Step 52
 from backend.jobs.stage2_routes import router as stage2_router
 
 
@@ -77,6 +78,7 @@ app = FastAPI(
 app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(jobs_router, prefix="/api/jobs")
+app.include_router(stage1_router, prefix="/api/jobs")  # Step 52: Stage 1 run trigger
 app.include_router(stage2_router, prefix="/api/jobs")
 app.include_router(assembly_router, prefix="/api/jobs")
 app.include_router(export_routes_router, prefix="/api/jobs")

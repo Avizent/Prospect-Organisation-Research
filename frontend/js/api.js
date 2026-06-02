@@ -164,6 +164,16 @@ const api = {
     request("GET",
       `/api/jobs/${encodeURIComponent(id)}/exports/validate`),
 
+  // Stage 1 run — POST starts the four-agent research pipeline for a
+  // job at "created". Returns 202 immediately; the orchestrator drives
+  // created → researching → briefing_ready in the background.
+  // Poll GET /api/jobs/{id} to observe progress.
+  // The route returns 503 unless the dependency providers are wired.
+  runStage1: (id, body = {}) =>
+    request("POST",
+      `/api/jobs/${encodeURIComponent(id)}/stage1/run`,
+      { json: body }),
+
   // Stage 2 run — POST starts the orchestrator on an approved job.
   // The route returns 503 unless the opt-in fake runtime is wired
   // (ANS_ENABLE_FAKE_STAGE2_RUNTIME=1). The frontend treats 503 as a

@@ -107,6 +107,11 @@ _ROUTES: list[tuple[str, str, dict | None]] = [
     ),
     (
         "POST",
+        "/api/jobs/00000000-0000-4000-8000-000000000000/stage1/run",
+        {},
+    ),
+    (
+        "POST",
         "/api/jobs/00000000-0000-4000-8000-000000000000/stage2/run",
         {"knowledge_bundle": "x"},
     ),
