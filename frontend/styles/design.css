@@ -911,7 +911,263 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * 12. Print isolation — A4/export output must not inherit shell styles
+ * 12. Briefing Review screen — three-column layout, editor cards (step 50)
+ * --------------------------------------------------------------------------- */
+
+.br-page {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* Page header */
+.br-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.br-header-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.br-header-right {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.br-page-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+  margin: 0 0 6px;
+}
+
+.br-header-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+}
+
+.br-meta-sep {
+  color: var(--text-faint);
+  margin: 0 2px;
+}
+
+.br-meta-company {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.br-watermark-note {
+  font-size: 12px;
+  max-width: 300px;
+  text-align: left;
+}
+
+/* Three-column layout */
+.br-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr 220px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .br-layout {
+    grid-template-columns: 1fr;
+  }
+  .br-sidebar,
+  .br-panels {
+    display: none;
+  }
+}
+
+/* Sidebar */
+.br-sidebar {
+  position: sticky;
+  top: 16px;
+}
+
+.br-sidebar-heading {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 4px;
+}
+
+.br-sidebar-helper {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin: 0 0 10px;
+}
+
+.br-section-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.br-section-nav-item {
+  display: block;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 60ms ease, color 60ms ease;
+}
+
+.br-section-nav-item:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.br-section-nav-item--active {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  border-color: #c4b5fd;
+  font-weight: 600;
+}
+
+.br-offline-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* Centre editor column */
+.br-editor-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Editor card */
+.br-editor-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 20px;
+}
+
+.br-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.br-editor-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.br-editable-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  background: var(--teal-bg);
+  color: var(--teal-text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.br-editor-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-muted);
+  resize: vertical;
+  outline: none;
+  transition: border-color 80ms ease;
+}
+
+.br-editor-textarea:focus {
+  border-color: var(--accent);
+}
+
+.br-editor-footer {
+  margin-top: 10px;
+}
+
+/* Right contextual panels */
+.br-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: sticky;
+  top: 16px;
+}
+
+.br-panel {
+  overflow: visible;
+}
+
+.br-panel-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.br-panel-heading--warning {
+  color: var(--warning-text);
+}
+
+.br-panel-muted {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.br-check-row,
+.br-gap-row,
+.br-citation-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.br-check-row:last-child,
+.br-gap-row:last-child,
+.br-citation-row:last-child {
+  border-bottom: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * 13. Print isolation — A4/export output must not inherit shell styles
  * --------------------------------------------------------------------------- */
 
 @media print {

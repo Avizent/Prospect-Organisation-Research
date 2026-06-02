@@ -3,17 +3,20 @@
  * gate (open-for-editing, save section, approve, request/complete/
  * fail regeneration).
  *
+ * Step 50: polished three-column layout — sidebar navigation, central
+ * editor cards, right-side contextual panels. All API calls, state
+ * machine behaviour, validation, and error handling are unchanged.
+ *
  * The five editable sections (snapshot, business_context, it_landscape,
  * key_people, opportunity) are presented as JSON textareas. The
- * operator edits the JSON, hits "Save section", and the inspector
+ * operator edits the JSON, hits "Save Draft Changes", and the inspector
  * POSTs a BriefingPatch with just that section. Validation errors
  * from the backend (422 with the pydantic error list) are rendered
  * inline so a broken source_indices reference points at the right
  * field.
  *
  * Sources are read-only here — editing the source register in step 12
- * would orphan source_indices in other sections. That gate lifts in
- * a later step when the source-register editor lands.
+ * would orphan source_indices in other sections.
  */
 
 import { api, ApiError } from "../api.js";
@@ -27,11 +30,27 @@ const EDITABLE_SECTIONS = [
   "opportunity",
 ];
 
+// Operator-friendly display labels for each section key.
+const _SECTION_LABELS = {
+  snapshot:         "Executive Summary",
+  business_context: "Market & Competitive Position",
+  it_landscape:     "Technology Landscape",
+  key_people:       "Key Decision Makers",
+  opportunity:      "Value Alignment & Pitch Generator",
+};
+
+function _displayLabel(key) {
+  if (_SECTION_LABELS[key]) return _SECTION_LABELS[key];
+  // Fallback: title-case the raw key.
+  return key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
 function _sectionEditor(id, sectionName, value, getState) {
+  const label = _displayLabel(sectionName);
   const banner = el("div", { class: "form-banner hidden", role: "alert" });
   const textarea = el("textarea", {
-    class: "section-json",
-    rows: 14,
+    class: "br-editor-textarea section-json",
+    rows: 16,
     spellcheck: "false",
   });
   textarea.value = JSON.stringify(value ?? null, null, 2);
@@ -39,13 +58,13 @@ function _sectionEditor(id, sectionName, value, getState) {
   const regenInput = el("textarea", {
     class: "regen-instructions",
     rows: 3,
-    placeholder: "Rewrite instructions for the regeneration agent…",
+    placeholder: "Rewrite instructions for the regeneration agent\u2026",
   });
 
   const save = el("button", {
     type: "button",
     class: "btn btn-secondary",
-    text: "Save section",
+    text: "Save Draft Changes",
     onclick: async () => {
       banner.classList.add("hidden");
       let parsed;
@@ -67,7 +86,7 @@ function _sectionEditor(id, sectionName, value, getState) {
           banner.textContent = formatDetail(err.detail
             ?? `Save failed (HTTP ${err.status}).`);
         } else {
-          banner.textContent = "Save failed — unexpected error.";
+          banner.textContent = "Save failed \u2014 unexpected error.";
         }
         banner.classList.remove("hidden");
       }
@@ -77,7 +96,7 @@ function _sectionEditor(id, sectionName, value, getState) {
   const requestRegen = el("button", {
     type: "button",
     class: "btn btn-plain",
-    text: "Request regeneration",
+    text: "Refine Section with AI",
     onclick: async () => {
       banner.classList.add("hidden");
       const instructions = regenInput.value.trim();
@@ -103,19 +122,25 @@ function _sectionEditor(id, sectionName, value, getState) {
           banner.textContent = formatDetail(err.detail
             ?? `Request failed (HTTP ${err.status}).`);
         } else {
-          banner.textContent = "Request failed — unexpected error.";
+          banner.textContent = "Request failed \u2014 unexpected error.";
         }
         banner.classList.remove("hidden");
       }
     },
   });
 
-  return el("section", { class: "briefing-section",
-                         "data-section": sectionName }, [
-    el("h3", { text: sectionName }),
+  return el("section", {
+    id: `br-section-${sectionName}`,
+    class: "br-editor-card briefing-section",
+    "data-section": sectionName,
+  }, [
+    el("div", { class: "br-editor-header" }, [
+      el("h3", { class: "br-editor-title", text: label }),
+      el("span", { class: "br-editable-badge", text: "EDITABLE MODE" }),
+    ]),
     banner,
     textarea,
-    el("div", { class: "row-actions" }, [save, requestRegen]),
+    el("div", { class: "br-editor-footer row-actions" }, [save, requestRegen]),
     el("details", { class: "regen-details" }, [
       el("summary", { text: "Regeneration instructions" }),
       regenInput,
@@ -126,7 +151,7 @@ function _sectionEditor(id, sectionName, value, getState) {
 export async function render(container, params) {
   const id = params.id;
   clear(container);
-  container.appendChild(el("p", { text: "Loading briefing…" }));
+  container.appendChild(el("p", { text: "Loading briefing\u2026" }));
 
   let status;
   let briefing;
@@ -152,11 +177,6 @@ export async function render(container, params) {
   const currentState = status.current_state;
   const getState = () => currentState;
 
-  const stateBadge = el("p", {}, [
-    el("span", { text: "Current state: " }),
-    el("strong", { text: currentState }),
-  ]);
-
   const gateBanner = el("div", { class: "form-banner hidden", role: "alert" });
 
   const openForEditing = el("button", {
@@ -176,7 +196,7 @@ export async function render(container, params) {
           gateBanner.textContent = formatDetail(err.detail
             ?? `Open failed (HTTP ${err.status}).`);
         } else {
-          gateBanner.textContent = "Open failed — unexpected error.";
+          gateBanner.textContent = "Open failed \u2014 unexpected error.";
         }
         gateBanner.classList.remove("hidden");
       }
@@ -186,7 +206,7 @@ export async function render(container, params) {
   const approve = el("button", {
     type: "button",
     class: "btn btn-primary",
-    text: "Approve briefing",
+    text: "Approve & Export Package",
     disabled: !(currentState === "briefing_ready"
                 || currentState === "user_editing"),
     onclick: async () => {
@@ -201,7 +221,7 @@ export async function render(container, params) {
           gateBanner.textContent = formatDetail(err.detail
             ?? `Approve failed (HTTP ${err.status}).`);
         } else {
-          gateBanner.textContent = "Approve failed — unexpected error.";
+          gateBanner.textContent = "Approve failed \u2014 unexpected error.";
         }
         gateBanner.classList.remove("hidden");
       }
@@ -230,46 +250,104 @@ export async function render(container, params) {
           gateBanner.textContent = formatDetail(err.detail
             ?? `Fail call failed (HTTP ${err.status}).`);
         } else {
-          gateBanner.textContent = "Fail call failed — unexpected error.";
+          gateBanner.textContent = "Fail call failed \u2014 unexpected error.";
         }
         gateBanner.classList.remove("hidden");
       }
     },
   });
 
-  container.appendChild(el("section", { class: "briefing-header" }, [
-    el("h2", { text: `Briefing — ${briefing.company_name}` }),
-    el("p", { class: "muted",
-              text: `Job ${id} · compiled ${briefing.compiled_at}` }),
-    stateBadge,
-    el("p", {}, [
-      el("a", {
-        href: `#/jobs/${encodeURIComponent(id)}`,
-        text: "← back to job status",
-      }),
-    ]),
-    gateBanner,
-    el("div", { class: "row-actions" }, [openForEditing, approve, failRegen]),
-    el("p", { class: "form-help" }, [
-      el("strong", { text: "Watermark: " }),
-      el("span", { text:
-        "Every generated document is marked INTERNAL DRAFT. The "
-        + "approval gate here is the only place a briefing changes "
-        + "before Stage 2 reads it." }),
-    ]),
-  ]));
+  // ---------------------------------------------------------------------------
+  // Page header — eyebrow, title, subtitle, CTA strip.
+  // ---------------------------------------------------------------------------
 
-  // User-context (free-text) editor — part of BriefingPatch but not a
-  // section enum value. Patch independently.
+  const pageHeader = el("div", { class: "page-header br-page-header" }, [
+    el("div", { class: "br-header-left" }, [
+      el("p", { class: "br-page-eyebrow", text: "STAGE 3: BRIEFING REVIEW" }),
+      el("h2", { class: "page-title",
+        text: "Review Corporate Briefing Document",
+      }),
+      el("p", { class: "page-subtitle",
+        text: "Edit generated sections, inspect gaps and sources, then approve the briefing for document generation.",
+      }),
+      el("p", { class: "br-header-meta" }, [
+        el("span", { class: "br-meta-company", text: briefing.company_name }),
+        el("span", { class: "br-meta-sep", text: " \u00b7 " }),
+        el("span", { class: "muted", text: `Job ${id}` }),
+        el("span", { class: "br-meta-sep", text: " \u00b7 " }),
+        el("a", {
+          href: `#/jobs/${encodeURIComponent(id)}`,
+          text: "\u2190 back to job status",
+        }),
+        el("span", { class: "br-meta-sep", text: " \u00b7 " }),
+        el("span", { class: "muted", text: `State: ${currentState}` }),
+      ]),
+    ]),
+    el("div", { class: "br-header-right" }, [
+      gateBanner,
+      el("div", { class: "row-actions" }, [approve, openForEditing, failRegen]),
+      el("p", { class: "form-help br-watermark-note" }, [
+        el("strong", { text: "Watermark: " }),
+        el("span", { text:
+          "Every generated document is marked INTERNAL DRAFT. The "
+          + "approval gate here is the only place a briefing changes "
+          + "before Stage 2 reads it." }),
+      ]),
+    ]),
+  ]);
+
+  // ---------------------------------------------------------------------------
+  // Sidebar — section navigation anchors.
+  // ---------------------------------------------------------------------------
+
+  const navItems = [];
+  navItems.push(el("a", {
+    class: "br-section-nav-item",
+    href: "#br-section-user_context",
+    text: "Operator Notes",
+  }));
+  for (let i = 0; i < EDITABLE_SECTIONS.length; i++) {
+    const sec = EDITABLE_SECTIONS[i];
+    const cls = i === 0
+      ? "br-section-nav-item br-section-nav-item--active"
+      : "br-section-nav-item";
+    navItems.push(el("a", {
+      class: cls,
+      href: `#br-section-${sec}`,
+      text: _displayLabel(sec),
+    }));
+  }
+  navItems.push(el("a", {
+    class: "br-section-nav-item",
+    href: "#br-section-sources",
+    text: "Sources (read-only)",
+  }));
+
+  const sidebar = el("div", { class: "br-sidebar" }, [
+    el("h3", { class: "br-sidebar-heading", text: "Briefing Sections" }),
+    el("p", { class: "br-sidebar-helper", text: "Select a section to review" }),
+    el("nav", { class: "br-section-nav", "aria-label": "Briefing sections" },
+       navItems),
+  ]);
+
+  // ---------------------------------------------------------------------------
+  // Centre column — section editors.
+  // ---------------------------------------------------------------------------
+
+  const editorChildren = [];
+
+  // user_context — free-text operator notes.
   const ucBanner = el("div", { class: "form-banner hidden", role: "alert" });
   const ucTextarea = el("textarea", {
-    class: "section-json", rows: 4, spellcheck: "true",
+    class: "br-editor-textarea section-json",
+    rows: 4,
+    spellcheck: "true",
   });
   ucTextarea.value = briefing.user_context ?? "";
   const ucSave = el("button", {
     type: "button",
     class: "btn btn-secondary",
-    text: "Save user context",
+    text: "Save Draft Changes",
     onclick: async () => {
       ucBanner.classList.add("hidden");
       try {
@@ -282,32 +360,102 @@ export async function render(container, params) {
           ucBanner.textContent = formatDetail(err.detail
             ?? `Save failed (HTTP ${err.status}).`);
         } else {
-          ucBanner.textContent = "Save failed — unexpected error.";
+          ucBanner.textContent = "Save failed \u2014 unexpected error.";
         }
         ucBanner.classList.remove("hidden");
       }
     },
   });
-  container.appendChild(el("section", { class: "briefing-section",
-                                        "data-section": "user_context" }, [
-    el("h3", { text: "user_context (operator notes)" }),
+  editorChildren.push(el("section", {
+    id: "br-section-user_context",
+    class: "br-editor-card briefing-section",
+    "data-section": "user_context",
+  }, [
+    el("div", { class: "br-editor-header" }, [
+      el("h3", { class: "br-editor-title", text: "Operator Notes" }),
+      el("span", { class: "br-editable-badge", text: "EDITABLE MODE" }),
+    ]),
     ucBanner,
     ucTextarea,
-    el("div", { class: "row-actions" }, [ucSave]),
+    el("div", { class: "br-editor-footer row-actions" }, [ucSave]),
   ]));
 
+  // Five structured sections.
   for (const section of EDITABLE_SECTIONS) {
-    container.appendChild(
-      _sectionEditor(id, section, briefing[section], getState));
+    editorChildren.push(_sectionEditor(id, section, briefing[section], getState));
   }
 
-  // Sources are read-only in step 12.
-  container.appendChild(el("section", { class: "briefing-section sources" }, [
-    el("h3", { text: "sources (read-only)" }),
+  // Sources — read-only.
+  editorChildren.push(el("section", {
+    id: "br-section-sources",
+    class: "br-editor-card briefing-section sources",
+  }, [
+    el("div", { class: "br-editor-header" }, [
+      el("h3", { class: "br-editor-title", text: "sources (read-only)" }),
+    ]),
     el("p", { class: "form-help", text:
       "Editing the source register here would orphan source_indices "
       + "in other sections. Patch via the API directly if you must." }),
     el("pre", { class: "detail-pre",
                 text: JSON.stringify(briefing.sources, null, 2) }),
+  ]));
+
+  const editorColumn = el("div", { class: "br-editor-column" }, editorChildren);
+
+  // ---------------------------------------------------------------------------
+  // Right panels — contextual intelligence.
+  // Honest fallback: no real checklist/gap/citation data exists in the
+  // section schema at this step, so "Not available for this section." is
+  // shown rather than invented data.
+  // ---------------------------------------------------------------------------
+
+  const panels = el("div", { class: "br-panels" }, [
+    el("div", { class: "br-panel card" }, [
+      el("div", { class: "card-header" }, [
+        el("span", { class: "br-panel-heading", text: "Section Checklist" }),
+      ]),
+      el("div", { class: "card-body" }, [
+        el("p", { class: "br-panel-muted",
+          text: "Not available for this section.",
+        }),
+      ]),
+    ]),
+    el("div", { class: "br-panel card" }, [
+      el("div", { class: "card-header" }, [
+        el("span", { class: "br-panel-heading br-panel-heading--warning",
+          text: "Identified Gaps",
+        }),
+      ]),
+      el("div", { class: "card-body" }, [
+        el("p", { class: "br-panel-muted",
+          text: "Not available for this section.",
+        }),
+      ]),
+    ]),
+    el("div", { class: "br-panel card" }, [
+      el("div", { class: "card-header" }, [
+        el("span", { class: "br-panel-heading", text: "Verified Citations" }),
+      ]),
+      el("div", { class: "card-body" }, [
+        el("p", { class: "br-panel-muted",
+          text: "Not available for this section.",
+        }),
+      ]),
+    ]),
+  ]);
+
+  // ---------------------------------------------------------------------------
+  // Assemble final layout.
+  // ---------------------------------------------------------------------------
+
+  const layout = el("div", { class: "br-layout" }, [
+    sidebar,
+    editorColumn,
+    panels,
+  ]);
+
+  container.appendChild(el("div", { class: "page br-page" }, [
+    pageHeader,
+    layout,
   ]));
 }
